@@ -1,5 +1,7 @@
 # Shelf - Dotfile Manager
 
+[![Shelf CI](https://github.com/ab22593k/shelf/actions/workflows/ci.yml/badge.svg)](https://github.com/ab22593k/shelf/actions/workflows/ci.yml)
+
 Shelf is a command-line tool for managing and syncing dotfiles across different machines. It allows you to track, list, remove, and sync your dotfiles with ease.
 
 ## Features

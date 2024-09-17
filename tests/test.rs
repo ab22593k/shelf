@@ -18,7 +18,6 @@ async fn create_test_file(dir: &Path, name: &str, content: &str) -> Result<PathB
     fs::write(&file_path, content).await?;
     Ok(file_path)
 }
-
 #[tokio::test]
 async fn test_add_and_list_dotfile() -> Result<()> {
     let (temp_dir, mut index) = setup_test_environment().await?;
@@ -27,9 +26,28 @@ async fn test_add_and_list_dotfile() -> Result<()> {
     index.add_ref(&test_file).await?;
 
     let dotfiles = index.list().collect::<Vec<_>>();
-    assert_eq!(dotfiles.len(), 1);
-    assert_eq!(dotfiles[0].0, ".testrc");
-    assert_eq!(dotfiles[0].1.source(), &test_file);
+    assert_eq!(
+        dotfiles.len(),
+        1,
+        "Expected 1 dotfile, found {}",
+        dotfiles.len()
+    );
+
+    let (name, dotfile) = &dotfiles[0];
+    assert!(
+        name.ends_with(".testrc"),
+        "Unexpected dotfile name: {}",
+        name
+    );
+
+    let canonical_test_file = test_file.canonicalize()?;
+    let canonical_dotfile_source = dotfile.source().canonicalize()?;
+
+    assert_eq!(
+        canonical_dotfile_source, canonical_test_file,
+        "Paths don't match: {:?} vs {:?}",
+        canonical_dotfile_source, canonical_test_file
+    );
 
     Ok(())
 }

@@ -1,3 +1,5 @@
+#![allow(clippy::nonminimal_bool)]
+
 mod dotfile;
 pub mod index;
 
