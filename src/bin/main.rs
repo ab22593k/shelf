@@ -1,12 +1,9 @@
 use anyhow::Result;
-// use clap::Parser;
-use shelf::{Commands, SlfActions, SlfCLI, SlfIndex};
-// use std::path::PathBuf;
+use clap::Parser;
+use shelf::{SlfActions, SlfCLI, SlfIndex};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    use clap::Parser;
-
     let cli = SlfCLI::parse();
     let config_dir = dirs::config_dir()
         .ok_or_else(|| anyhow::anyhow!("Failed to get config directory"))?
@@ -27,7 +24,7 @@ async fn main() -> Result<()> {
     };
 
     match &cli.command {
-        Some(Commands::Dotfiles { action }) => match action {
+        Some(action) => match action {
             SlfActions::Track { path } => index.add_ref(path).await?,
             SlfActions::List => {
                 for (name, dotfile) in index.list() {
