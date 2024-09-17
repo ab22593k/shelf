@@ -1,4 +1,8 @@
+mod dotfile;
+pub mod index;
+
 use clap::{Parser, Subcommand};
+pub use index::SlfIndex;
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -66,9 +70,5 @@ pub enum SlfActions {
     /// The `output_dir` parameter specifies where the symlinks will be created. If the directory
     /// doesn't exist, it will be created. Existing symlinks in the output directory will be
     /// updated to reflect any changes in the tracked dotfiles.nc tracked dotfiles
-    Sync {
-        /// Output directory for synced dotfiles
-        #[arg(short, long)]
-        outdir: PathBuf,
-    },
+    Sync,
 }

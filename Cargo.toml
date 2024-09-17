@@ -6,7 +6,7 @@ edition = "2021"
 
 [[bin]]
 name = "shelf"
-path = "src/main.rs"
+path = "src/bin/main.rs"
 
 [lib]
 name = "shelf"
