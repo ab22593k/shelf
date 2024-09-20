@@ -4,7 +4,7 @@ use shelf::{
     suggestions::{interactive_selection, print_suggestions},
     SlfActions, SlfCLI, SlfIndex,
 };
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -16,7 +16,10 @@ async fn main() -> Result<()> {
     match cli.command {
         SlfActions::Track { path } => track_dotfile(&mut index, &path).await?,
         SlfActions::List => list_dotfiles(&index),
-        SlfActions::Remove { path } => remove_dotfile(&mut index, &path)?,
+        SlfActions::Remove { path } => remove_dotfile(
+            &mut index,
+            path.as_path().to_str().expect("conversion failed"),
+        )?,
         SlfActions::Sync => index.do_sync().await?,
         SlfActions::Suggest { interactive } => suggest_dotfiles(&mut index, interactive).await?,
     }
@@ -33,7 +36,7 @@ fn get_config_directory() -> Result<PathBuf> {
     Ok(config_dir)
 }
 
-async fn load_or_create_index(config_dir: &PathBuf, index_path: &PathBuf) -> Result<SlfIndex> {
+async fn load_or_create_index(config_dir: &Path, index_path: &Path) -> Result<SlfIndex> {
     if index_path.exists() {
         match tokio::fs::read_to_string(index_path).await {
             Ok(contents) => match serde_json::from_str(&contents) {
@@ -47,8 +50,8 @@ async fn load_or_create_index(config_dir: &PathBuf, index_path: &PathBuf) -> Res
     }
 }
 
-async fn track_dotfile(index: &mut SlfIndex, path: &PathBuf) -> Result<()> {
-    index.add_ref(path.as_path().to_str().unwrap()).await
+async fn track_dotfile(index: &mut SlfIndex, path: &Path) -> Result<()> {
+    index.add_ref(path).await
 }
 
 fn list_dotfiles(index: &SlfIndex) {
@@ -62,8 +65,8 @@ fn list_dotfiles(index: &SlfIndex) {
     }
 }
 
-fn remove_dotfile(index: &mut SlfIndex, path: &PathBuf) -> Result<()> {
-    index.remove_ref(path.to_str().unwrap())
+fn remove_dotfile(index: &mut SlfIndex, path: &str) -> Result<()> {
+    index.remove_ref(path)
 }
 
 async fn suggest_dotfiles(index: &mut SlfIndex, interactive: bool) -> Result<()> {

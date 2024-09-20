@@ -53,13 +53,14 @@ impl SlfIndex {
         Ok(())
     }
 
-    pub fn remove_ref<S: AsRef<str>>(&mut self, name: S) -> Result<()> {
-        let name = name.as_ref();
+    pub fn remove_ref(&mut self, name: &str) -> Result<()> {
+        // let name = name.as_ref();
         self.dotfiles
             .remove(name)
             .ok_or_else(|| anyhow::anyhow!("Dotfile not found: {}", name))?;
         Ok(())
     }
+
     pub fn list(&self) -> impl Iterator<Item = (&String, &Dotfile)> {
         let mut sorted_keys: Vec<_> = self.dotfiles.keys().collect();
         sorted_keys.sort();
@@ -70,8 +71,6 @@ impl SlfIndex {
 
     pub async fn do_sync(&self) -> Result<()> {
         let target_dir = self.target_directory.clone();
-        // .map(|p| p.as_ref().to_path_buf())
-        // .unwrap_or_else(|| self.target_directory.clone());
 
         fs::create_dir_all(&target_dir)
             .await
