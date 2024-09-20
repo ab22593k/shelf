@@ -90,3 +90,36 @@ pub fn print_suggestions() {
         }
     }
 }
+
+pub fn interactive_selection() -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    use dialoguer::MultiSelect;
+
+    let categories = get_all_categories();
+    let category_names: Vec<&str> = categories.iter().map(|c| c.name).collect();
+
+    let selected_categories = MultiSelect::new()
+        .with_prompt("Select categories")
+        .items(&category_names)
+        .interact()
+        .unwrap();
+
+    let mut selected_files = Vec::new();
+
+    for &index in &selected_categories {
+        let category = &categories[index];
+        let files = &category.files;
+
+        println!("\nSelecting files for {}:", category.name);
+        let selected = MultiSelect::new()
+            .with_prompt("Select files")
+            .items(files)
+            .interact()
+            .unwrap();
+
+        for &file_index in &selected {
+            selected_files.push(files[file_index].to_string());
+        }
+    }
+
+    Ok(selected_files)
+}

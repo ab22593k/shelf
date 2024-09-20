@@ -12,7 +12,14 @@ pub struct Dotfile {
 
 impl Dotfile {
     pub async fn new<P: AsRef<Path>>(source: P, target_dir: PathBuf) -> Result<Self> {
-        let source = fs::canonicalize(source.as_ref())
+        let source = source.as_ref().to_path_buf();
+        if !source.exists() {
+            return Err(anyhow::anyhow!(
+                "Source file does not exist: {}",
+                source.display()
+            ));
+        }
+        let source = fs::canonicalize(&source)
             .await
             .context("Failed to canonicalize source path")?;
 

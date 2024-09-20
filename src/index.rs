@@ -25,9 +25,31 @@ impl SlfIndex {
         })
     }
     pub async fn add_ref<P: AsRef<Path>>(&mut self, path: P) -> Result<()> {
-        let dotfile =
-            Dotfile::new(path.as_ref().to_path_buf(), self.target_directory.clone()).await?;
-        self.dotfiles.insert(dotfile.name().to_string(), dotfile);
+        let path_str = path
+            .as_ref()
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("Invalid path"))?;
+        let expanded_path = shellexpand::tilde(path_str);
+        let path_buf = PathBuf::from(expanded_path.as_ref());
+
+        if !path_buf.exists() {
+            return Err(anyhow::anyhow!(
+                "File does not exist: {}",
+                path_buf.display()
+            ));
+        }
+
+        let dotfile = Dotfile::new(path_buf.clone(), self.target_directory.clone()).await?;
+        let name = dotfile.name().to_string();
+
+        if self.dotfiles.contains_key(&name) {
+            return Err(anyhow::anyhow!(
+                "Dotfile already exists: {}",
+                path_buf.display()
+            ));
+        }
+
+        self.dotfiles.insert(name, dotfile);
         Ok(())
     }
 
@@ -38,9 +60,12 @@ impl SlfIndex {
             .ok_or_else(|| anyhow::anyhow!("Dotfile not found: {}", name))?;
         Ok(())
     }
-
     pub fn list(&self) -> impl Iterator<Item = (&String, &Dotfile)> {
-        self.dotfiles.iter()
+        let mut sorted_keys: Vec<_> = self.dotfiles.keys().collect();
+        sorted_keys.sort();
+        sorted_keys
+            .into_iter()
+            .map(|key| (key, &self.dotfiles[key]))
     }
 
     pub async fn do_sync(&self) -> Result<()> {

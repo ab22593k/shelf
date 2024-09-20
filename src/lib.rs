@@ -48,10 +48,13 @@ pub enum SlfActions {
     /// consistent across different systems or backup locations.
     #[command(about = "Synchronize all tracked dotfiles across environments")]
     Sync,
-
     /// Suggest commonly used configuration files
     /// This command provides a list of popular dotfiles and configuration
     /// files commonly used across Linux and macOS systems.
     #[command(about = "Suggest commonly used configuration files")]
-    Suggest,
+    Suggest {
+        /// Enable interactive mode for selecting dotfiles
+        #[arg(short, long)]
+        interactive: bool,
+    },
 }
