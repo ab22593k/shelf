@@ -23,27 +23,57 @@ cargo install --path .
 
 ## Usage
 
-Here are some common commands you can use with Shelf:
+Shelf provides several commands to manage your dotfiles:
 
-1. Track a new dotfile:
-   ```
-   slf track /path/to/your/dotfile
-   ```
+```bash
+# Track a new dotfile
+shlf track ~/.bashrc
 
-2. List all tracked dotfiles:
-   ```
-   slf list
-   ```
+# List all tracked dotfiles
+shlf list
 
-3. Remove a dotfile from tracking:
-   ```
-   slf remove dotfile_name
-   ```
+# Remove a dotfile from tracking
+shlf remove .bashrc
 
-4. Sync all dotfiles:
-   ```
-   slf sync
-   ```
+# Sync all dotfiles
+shlf sync
+
+# Interactive selection of dotfiles to track
+shlf suggest
+
+# Show help
+shlf --help
+```
+
+Each command can be run with `-h` or `--help` for more information.
+
+## Shell Completion
+
+Shelf supports generating shell completion scripts for various shells. You can generate these scripts using the `completion` subcommand:
+
+```bash
+# Generate completion script for Bash
+shlf completion bash > shlf.bash
+
+# Generate completion script for Zsh
+shlf completion zsh > _shlf
+
+# Generate completion script for Fish
+shlf completion fish > shlf.fish
+```
+
+To use the completion scripts:
+
+- For Bash, add the following line to your `~/.bashrc`:
+  ```bash
+  source /path/to/shlf.bash
+  ```
+
+- For Zsh, place the `_shlf` file in `~/.zfunc`.
+
+- For Fish, place the `shlf.fish` file in `~/.config/fish/completions`.
+
+After setting up the completion script, restart your shell or source the respective configuration file to enable completions for the `shlf` command.
 
 ## Development
 

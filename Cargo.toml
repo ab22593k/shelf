@@ -1,18 +1,18 @@
 [package]
 name = "shlf"
 description = "A command-line tool for managing dotfiles"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/yourusername/shlf"
 documentation = "https://docs.rs/shlf"
 
 [[bin]]
-name = "shelf"
+name = "shlf"
 path = "src/bin/main.rs"
 
 [lib]
-name = "shelf"
+name = "shlf"
 path = "src/lib.rs"
 
 [dependencies]
@@ -27,6 +27,8 @@ log = "0.4.22"
 anyhow = "1.0.89"
 dialoguer = "0.11.0"
 shellexpand = "3.1.0"
+sha2 = "0.10.8"
+clap_complete = "4.5.29"
 
 [profile.release]
 opt-level = 3

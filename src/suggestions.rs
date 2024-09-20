@@ -1,125 +1,212 @@
+//! This module provides functionality for managing and suggesting common dotfiles.
+//! It includes methods for listing, displaying, and interactively selecting dotfiles.
+
 use std::collections::HashMap;
 
-struct DotfileCategory {
+/// Represents a collection of dotfile suggestions organized by categories.
+///
+/// This struct contains a list of `Category` instances, each representing a group
+/// of related dotfiles. It provides methods for retrieving, displaying, and
+/// interactively selecting dotfiles across various categories.
+pub struct Suggestions {
+    categories: Vec<Category>,
+}
+
+/// Represents a category of dotfiles, containing a name and a list of file paths.
+///
+/// Each `Category` instance groups related dotfiles under a common name,
+/// making it easier to organize and present suggestions to users.
+struct Category {
     name: &'static str,
     files: Vec<&'static str>,
 }
 
-impl DotfileCategory {
-    fn new(name: &'static str, files: Vec<&'static str>) -> Self {
-        DotfileCategory { name, files }
-    }
-}
-
-fn get_all_categories() -> Vec<DotfileCategory> {
-    vec![
-        DotfileCategory::new(
-            "Shell",
-            vec![
-                "~/.bashrc",
-                "~/.zshrc",
-                "~/.profile",
-                "~/.bash_profile",
-                "~/.bash_aliases",
-                "~/.zprofile",
+impl Suggestions {
+    /// Creates a new `Suggestions` instance with predefined categories and dotfiles.
+    ///
+    /// This method initializes the `Suggestions` struct with a set of common dotfile
+    /// categories and their associated files. The categories include Shell, Git, Vim,
+    /// Emacs, Tmux, SSH, X11, macOS, IDE, and Window Managers.
+    ///
+    /// # Returns
+    ///
+    /// A new `Suggestions` instance containing predefined categories and dotfiles.
+    fn new() -> Self {
+        Suggestions {
+            categories: vec![
+                Category {
+                    name: "Shell",
+                    files: vec![
+                        "~/.bashrc",
+                        "~/.zshrc",
+                        "~/.profile",
+                        "~/.bash_profile",
+                        "~/.bash_aliases",
+                        "~/.zprofile",
+                    ],
+                },
+                Category {
+                    name: "Git",
+                    files: vec![
+                        "~/.gitconfig",
+                        "~/.gitignore_global",
+                        "~/.gitmessage",
+                        "~/.gitattributes",
+                    ],
+                },
+                Category {
+                    name: "Vim",
+                    files: vec!["~/.vimrc", "~/.vim/", "~/.config/nvim/init.vim"],
+                },
+                Category {
+                    name: "Emacs",
+                    files: vec!["~/.emacs", "~/.emacs.d/init.el", "~/.doom.d/config.el"],
+                },
+                Category {
+                    name: "Tmux",
+                    files: vec!["~/.tmux.conf"],
+                },
+                Category {
+                    name: "SSH",
+                    files: vec!["~/.ssh/config", "~/.ssh/known_hosts"],
+                },
+                Category {
+                    name: "X11",
+                    files: vec!["~/.xinitrc", "~/.Xresources", "~/.xprofile", "~/.Xmodmap"],
+                },
+                Category {
+                    name: "macOS",
+                    files: vec![
+                        "~/Library/Preferences/",
+                        "~/.config/karabiner/karabiner.json",
+                        "~/.config/alacritty/alacritty.yml",
+                    ],
+                },
+                Category {
+                    name: "IDE",
+                    files: vec![
+                        "~/.vscode/settings.json",
+                        "~/.idea/config/options/",
+                        "~/.config/sublime-text-3/Packages/User/Preferences.sublime-settings",
+                    ],
+                },
+                Category {
+                    name: "Window Managers",
+                    files: vec![
+                        "~/.config/i3/config",
+                        "~/.config/sway/config",
+                        "~/.dwm/config.h",
+                    ],
+                },
             ],
-        ),
-        DotfileCategory::new(
-            "Git",
-            vec![
-                "~/.gitconfig",
-                "~/.gitignore_global",
-                "~/.gitmessage",
-                "~/.gitattributes",
-            ],
-        ),
-        DotfileCategory::new(
-            "Vim",
-            vec!["~/.vimrc", "~/.vim/", "~/.config/nvim/init.vim"],
-        ),
-        DotfileCategory::new(
-            "Emacs",
-            vec!["~/.emacs", "~/.emacs.d/init.el", "~/.doom.d/config.el"],
-        ),
-        DotfileCategory::new("Tmux", vec!["~/.tmux.conf"]),
-        DotfileCategory::new("SSH", vec!["~/.ssh/config", "~/.ssh/known_hosts"]),
-        DotfileCategory::new(
-            "X11",
-            vec!["~/.xinitrc", "~/.Xresources", "~/.xprofile", "~/.Xmodmap"],
-        ),
-        DotfileCategory::new(
-            "macOS",
-            vec![
-                "~/Library/Preferences/",
-                "~/.config/karabiner/karabiner.json",
-                "~/.config/alacritty/alacritty.yml",
-            ],
-        ),
-        DotfileCategory::new(
-            "IDE",
-            vec![
-                "~/.vscode/settings.json",
-                "~/.idea/config/options/",
-                "~/.config/sublime-text-3/Packages/User/Preferences.sublime-settings",
-            ],
-        ),
-        DotfileCategory::new(
-            "Window Managers",
-            vec![
-                "~/.config/i3/config",
-                "~/.config/sway/config",
-                "~/.dwm/config.h",
-            ],
-        ),
-    ]
-}
-
-pub fn get_common_dotfiles() -> HashMap<&'static str, Vec<&'static str>> {
-    get_all_categories()
-        .into_iter()
-        .map(|cat| (cat.name, cat.files))
-        .collect()
-}
-
-pub fn print_suggestions() {
-    println!("Suggested dotfiles to track:");
-    for category in get_all_categories() {
-        println!("\n{}:", category.name);
-        for file in category.files {
-            println!("  {}", file);
         }
     }
-}
 
-pub fn interactive_selection() -> Result<Vec<String>, Box<dyn std::error::Error>> {
-    use dialoguer::MultiSelect;
+    /// Returns a HashMap of common dotfiles grouped by category.
+    ///
+    /// This method creates a HashMap where the keys are category names and the values
+    /// are vectors of file paths associated with each category. It provides a convenient
+    /// way to access all the suggested dotfiles organized by their respective categories.
+    ///
+    /// # Returns
+    ///
+    /// A HashMap where keys are category names (&str) and values are vectors of file paths (Vec<&str>).
+    pub fn get_common_dotfiles(&self) -> HashMap<&'static str, Vec<&'static str>> {
+        self.categories
+            .iter()
+            .map(|cat| (cat.name, cat.files.clone()))
+            .collect()
+    }
 
-    let categories = get_all_categories();
-    let category_names: Vec<&str> = categories.iter().map(|c| c.name).collect();
+    /// Prints all suggested dotfiles grouped by category.
+    ///
+    /// This method displays a formatted list of all dotfile suggestions,
+    /// organized by their respective categories. Each category name is
+    /// printed as a header, followed by the list of associated file paths.
+    ///
+    /// # Example output:
+    ///
+    /// ```text
+    /// Suggested dotfiles to track:
+    ///
+    /// Shell:
+    ///   ~/.bashrc
+    ///   ~/.zshrc
+    ///   ...
+    ///
+    /// Git:
+    ///   ~/.gitconfig
+    ///   ~/.gitignore_global
+    ///   ...
+    /// ```
+    pub fn print_suggestions(&self) {
+        println!("Suggested dotfiles to track:");
+        for category in &self.categories {
+            println!("\n{}:", category.name);
+            for file in &category.files {
+                println!("  {}", file);
+            }
+        }
+    }
 
-    let selected_categories = MultiSelect::new()
-        .with_prompt("Select categories")
-        .items(&category_names)
-        .interact()
-        .unwrap();
+    /// Provides an interactive interface for users to select dotfiles.
+    ///
+    /// This method uses the `dialoguer` crate to create a multi-select interface
+    /// allowing users to choose categories and then specific files within those
+    /// categories. It presents a two-step selection process:
+    /// 1. Select categories of interest
+    /// 2. For each selected category, choose specific files
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing a `Vec<String>` of selected file paths on success,
+    /// or a boxed error on failure.
+    ///
+    /// # Errors
+    ///
+    /// This method may return an error if there are issues with the user interface
+    /// or if the selection process is interrupted.
+    pub fn interactive_selection(&self) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+        use dialoguer::MultiSelect;
 
-    let mut selected_files = Vec::new();
+        let category_names: Vec<&str> = self.categories.iter().map(|c| c.name).collect();
 
-    for &index in &selected_categories {
-        let category = &categories[index];
-        let files = &category.files;
-
-        println!("\nSelecting files for {}:", category.name);
-        let selected = MultiSelect::new()
-            .with_prompt("Select files")
-            .items(files)
+        let selected_categories = MultiSelect::new()
+            .with_prompt("Select categories")
+            .items(&category_names)
             .interact()
             .unwrap();
 
-        for &file_index in &selected {
-            selected_files.push(files[file_index].to_string());
-        }
-    }
+        let mut selected_files = Vec::new();
 
-    Ok(selected_files)
+        for &index in &selected_categories {
+            let category = &self.categories[index];
+            let files = &category.files;
+
+            println!("\nSelecting files for {}:", category.name);
+            let selected = MultiSelect::new()
+                .with_prompt("Select files")
+                .items(files)
+                .interact()
+                .unwrap();
+
+            for &file_index in &selected {
+                selected_files.push(files[file_index].to_string());
+            }
+        }
+
+        Ok(selected_files)
+    }
+}
+
+pub fn get_common_dotfiles() -> HashMap<&'static str, Vec<&'static str>> {
+    Suggestions::new().get_common_dotfiles()
+}
+
+pub fn print_suggestions() {
+    Suggestions::new().print_suggestions()
+}
+
+pub fn interactive_selection() -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    Suggestions::new().interactive_selection()
 }

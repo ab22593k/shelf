@@ -1,30 +1,33 @@
 #![allow(clippy::nonminimal_bool)]
 
-mod dotfile;
-mod index;
+pub mod dotfile;
 pub mod suggestions;
 
+use clap_complete::Shell;
+
 use clap::{Parser, Subcommand};
-pub use index::SlfIndex;
 use std::path::PathBuf;
+
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 #[command(arg_required_else_help = true)]
-pub struct SlfCLI {
+pub struct Slf {
     #[command(subcommand)]
-    pub command: SlfActions,
+    pub command: Actions,
 }
 
 #[derive(Subcommand)]
-pub enum SlfActions {
-    /// Track a new dotfile or multiple dotfiles for management
+pub enum Actions {
+    /// Track one or more new dotfiles for management
     /// This command adds the specified file(s) to the list of tracked dotfiles,
     /// allowing them to be synchronized across different environments.
-    #[command(about = "Track a new dotfile or multiple dotfiles for management")]
+    /// Multiple files or directories can be specified at once.
+    #[command(about = "Track one or more new dotfiles for management")]
     Track {
-        /// Path to the dotfile(s) to be tracked
-        /// This can be a single file or a directory containing multiple dotfiles.
-        path: PathBuf,
+        /// Paths to the dotfiles to be tracked
+        /// These can be individual files or directories containing dotfiles.
+        #[arg(required = true)]
+        paths: Vec<PathBuf>,
     },
 
     /// List all currently tracked dotfiles
@@ -56,5 +59,13 @@ pub enum SlfActions {
         /// Enable interactive mode for selecting dotfiles
         #[arg(short, long)]
         interactive: bool,
+    },
+
+    /// Generate shell completion scripts
+    #[command(about = "Generate shell completion scripts")]
+    Completion {
+        /// The shell to generate completions for
+        #[arg(value_enum)]
+        shell: Shell,
     },
 }

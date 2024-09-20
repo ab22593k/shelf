@@ -1,15 +1,14 @@
 use anyhow::Result;
-use shelf::SlfIndex;
+use shlf::dotfile::Dotfiles;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use tokio::fs;
-
-async fn setup_test_environment() -> Result<(TempDir, SlfIndex)> {
+async fn setup_test_environment() -> Result<(TempDir, Dotfiles)> {
     let temp_dir = TempDir::new()?;
     let config_dir = temp_dir.path().join("shelf");
     let target_dir = config_dir.join("dotfiles");
     fs::create_dir_all(&target_dir).await?;
-    let index = SlfIndex::new(&target_dir).await?;
+    let index = Dotfiles::new(&target_dir).await?;
     Ok((temp_dir, index))
 }
 
@@ -27,17 +26,15 @@ async fn create_test_files(dir: &Path, files: &[(&str, &str)]) -> Result<Vec<Pat
     }
     Ok(created_files)
 }
-
-async fn add_test_files_to_index(index: &mut SlfIndex, files: &[PathBuf]) -> Result<()> {
+async fn add_test_files_to_index(index: &mut Dotfiles, files: &[PathBuf]) -> Result<()> {
     for file in files {
-        index.add_ref(file.to_str().unwrap()).await?;
+        index.add_dotfile(file.to_str().unwrap()).await?;
     }
     Ok(())
 }
-
 async fn setup_test_index_with_files(
     files: &[(&str, &str)],
-) -> Result<(TempDir, SlfIndex, Vec<PathBuf>)> {
+) -> Result<(TempDir, Dotfiles, Vec<PathBuf>)> {
     let (temp_dir, mut index) = setup_test_environment().await?;
     let created_files = create_test_files(temp_dir.path(), files).await?;
     add_test_files_to_index(&mut index, &created_files).await?;
@@ -52,8 +49,7 @@ async fn test_add_and_list_dotfile() -> Result<()> {
     ];
     files.sort_by(|a, b| a.0.cmp(b.0));
     let (temp_dir, mut index, created_files) = setup_test_index_with_files(&files).await?;
-
-    let mut dotfiles: Vec<_> = index.list().collect();
+    let mut dotfiles: Vec<_> = index.list_dotfiles().collect();
     dotfiles.sort_by(|a, b| a.0.cmp(b.0));
 
     assert_eq!(
@@ -77,7 +73,7 @@ async fn test_add_and_list_dotfile() -> Result<()> {
             .canonicalize()
             .map_err(|e| anyhow::anyhow!("Failed to canonicalize test file: {}", e))?;
         let canonical_dotfile_source = dotfile
-            .source()
+            .source
             .canonicalize()
             .map_err(|e| anyhow::anyhow!("Failed to canonicalize dotfile source: {}", e))?;
 
@@ -88,7 +84,7 @@ async fn test_add_and_list_dotfile() -> Result<()> {
         );
 
         // Verify file content
-        let content = fs::read_to_string(dotfile.source())
+        let content = fs::read_to_string(dotfile.source.clone())
             .await
             .map_err(|e| anyhow::anyhow!("Failed to read dotfile content: {}", e))?;
         assert_eq!(
@@ -99,7 +95,7 @@ async fn test_add_and_list_dotfile() -> Result<()> {
     }
 
     // Test adding a file that already exists
-    let result = index.add_ref(created_files[0].to_str().unwrap()).await;
+    let result = index.add_dotfile(created_files[0].to_str().unwrap()).await;
     assert!(result.is_err(), "Adding an existing dotfile should fail");
 
     // Cleanup
@@ -117,18 +113,36 @@ async fn test_add_and_list_dotfile() -> Result<()> {
 
 #[tokio::test]
 async fn test_add_multiple_dotfiles() -> Result<()> {
+    let (temp_dir, mut index) = setup_test_environment().await?;
+
     let files = [
         (".bashrc", "# Bash configuration"),
         (".vimrc", "\" Vim configuration"),
         (".gitconfig", "[user]\n\tname = Test User"),
     ];
-    let (_, index, _) = setup_test_index_with_files(&files).await?;
+    let created_files = create_test_files(temp_dir.path(), &files).await?;
 
-    let dotfiles = index.list().collect::<Vec<_>>();
+    let results = index
+        .add_multiple_dotfiles(created_files.iter().map(|p| p.to_str().unwrap()))
+        .await;
+
+    assert_eq!(
+        results.len(),
+        files.len(),
+        "Expected {} results, got {}",
+        files.len(),
+        results.len()
+    );
+    for result in &results {
+        assert!(result.is_ok(), "Adding a dotfile failed: {:?}", result);
+    }
+
+    let dotfiles = index.list_dotfiles().collect::<Vec<_>>();
     assert_eq!(
         dotfiles.len(),
-        3,
-        "Expected 3 dotfiles, found {}",
+        files.len(),
+        "Expected {} dotfiles, found {}",
+        files.len(),
         dotfiles.len()
     );
 
@@ -139,8 +153,8 @@ async fn test_add_duplicate_dotfile() -> Result<()> {
     let (temp_dir, mut index) = setup_test_environment().await?;
     let test_file = create_test_file(temp_dir.path(), ".testrc", "original content").await?;
 
-    index.add_ref(test_file.to_str().unwrap()).await?;
-    let result = index.add_ref(test_file.to_str().unwrap()).await;
+    index.add_dotfile(test_file.to_str().unwrap()).await?;
+    let result = index.add_dotfile(test_file.to_str().unwrap()).await;
 
     match result {
         Err(e) => {
@@ -167,12 +181,50 @@ async fn test_add_duplicate_dotfile() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn test_add_multiple_dotfiles_at_once() -> Result<()> {
+    let (temp_dir, mut index) = setup_test_environment().await?;
+    let files = [
+        (".bashrc", "# Bash configuration"),
+        (".vimrc", "\" Vim configuration"),
+        (".gitconfig", "[user]\n\tname = Test User"),
+    ];
+    let created_files = create_test_files(temp_dir.path(), &files).await?;
+
+    let results = index
+        .add_multiple_dotfiles(created_files.iter().map(|p| p.to_str().unwrap()))
+        .await;
+
+    assert_eq!(results.len(), 3, "Expected 3 results, one for each file");
+    assert!(
+        results.iter().all(|r| r.is_ok()),
+        "All files should be added successfully"
+    );
+
+    let dotfiles: Vec<_> = index.list_dotfiles().collect();
+    assert_eq!(dotfiles.len(), 3, "Expected 3 dotfiles to be tracked");
+
+    for (file, content) in files.iter() {
+        let dotfile = dotfiles.iter().find(|(name, _)| name.ends_with(file));
+        assert!(dotfile.is_some(), "Dotfile {} should be tracked", file);
+        let (_, entry) = dotfile.unwrap();
+        let file_content = fs::read_to_string(&entry.source).await?;
+        assert_eq!(
+            file_content, *content,
+            "File content should match for {}",
+            file
+        );
+    }
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn test_sync_creates_symlinks() -> Result<()> {
     let files = [(".testrc", "test content")];
-    let (temp_dir, index, created_files) = setup_test_index_with_files(&files).await?;
-
-    index.do_sync().await?;
+    let (temp_dir, mut index, created_files) = setup_test_index_with_files(&files).await?;
+    index.sync_dotfiles().await?;
 
     let target_dir = temp_dir.path().join("shelf").join("dotfiles");
     let symlink = target_dir.join(".testrc");
@@ -218,7 +270,7 @@ async fn test_list_returns_correct_info() -> Result<()> {
     files.sort_by(|a, b| a.0.cmp(b.0));
     let (temp_dir, index, created_files) = setup_test_index_with_files(&files).await?;
 
-    let mut dotfiles: Vec<_> = index.list().collect();
+    let mut dotfiles: Vec<_> = index.list_dotfiles().collect();
     dotfiles.sort_by(|a, b| a.0.cmp(b.0));
 
     assert_eq!(
@@ -238,7 +290,7 @@ async fn test_list_returns_correct_info() -> Result<()> {
             expected_name
         );
 
-        let canonical_source = dotfile.source().canonicalize()?;
+        let canonical_source = dotfile.source.canonicalize()?;
         let canonical_created = created_files[i].canonicalize()?;
         assert_eq!(
             canonical_source, canonical_created,
@@ -247,7 +299,7 @@ async fn test_list_returns_correct_info() -> Result<()> {
         );
 
         // Verify file content
-        let content = fs::read_to_string(dotfile.source()).await?;
+        let content = fs::read_to_string(dotfile.source.clone()).await?;
         assert_eq!(
             content, files[i].1,
             "Content mismatch for {}: expected '{}', got '{}'",
@@ -280,10 +332,10 @@ async fn test_list_returns_correct_info() -> Result<()> {
 async fn test_remove_dotfile() -> Result<()> {
     let (temp_dir, mut index) = setup_test_environment().await?;
     let test_file = create_test_file(temp_dir.path(), ".testrc", "test content").await?;
-    index.add_ref(test_file.to_str().unwrap()).await?;
-    index.remove_ref(".testrc")?;
+    index.add_dotfile(test_file.to_str().unwrap()).await?;
+    index.remove_dotfile(".testrc")?;
 
-    let dotfiles = index.list().collect::<Vec<_>>();
+    let dotfiles = index.list_dotfiles().collect::<Vec<_>>();
     assert_eq!(dotfiles.len(), 0);
 
     Ok(())
@@ -294,10 +346,10 @@ async fn test_sync_dotfiles() -> Result<()> {
     let test_file1 = create_test_file(temp_dir.path(), ".testrc1", "test content 1").await?;
     let test_file2 = create_test_file(temp_dir.path(), ".testrc2", "test content 2").await?;
 
-    index.add_ref(&test_file1.to_str().unwrap()).await?;
-    index.add_ref(&test_file2.to_str().unwrap()).await?;
+    index.add_dotfile(&test_file1.to_str().unwrap()).await?;
+    index.add_dotfile(&test_file2.to_str().unwrap()).await?;
 
-    index.do_sync().await?;
+    index.sync_dotfiles().await?;
 
     let target_dir = temp_dir.path().join("shelf").join("dotfiles");
     assert!(target_dir.join(".testrc1").exists());
@@ -340,7 +392,7 @@ async fn test_add_nonexistent_file() -> Result<()> {
     let (temp_dir, mut index) = setup_test_environment().await?;
     let nonexistent_file = temp_dir.path().join("nonexistent");
 
-    let result = index.add_ref(&nonexistent_file.to_str().unwrap()).await;
+    let result = index.add_dotfile(&nonexistent_file.to_str().unwrap()).await;
     assert!(result.is_err());
 
     Ok(())
@@ -350,7 +402,7 @@ async fn test_add_nonexistent_file() -> Result<()> {
 async fn test_remove_nonexistent_dotfile() -> Result<()> {
     let (_, mut index) = setup_test_environment().await?;
 
-    let result = index.remove_ref("nonexistent");
+    let result = index.remove_dotfile("nonexistent");
     assert!(result.is_err());
 
     Ok(())
