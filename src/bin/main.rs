@@ -1,6 +1,8 @@
 use anyhow::Result;
 use clap::Parser;
-use shelf::{SlfActions, SlfCLI, SlfIndex};
+use shelf::{suggestions::print_suggestions, SlfActions, SlfCLI, SlfIndex};
+
+// mod shelf::suggestions;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -22,24 +24,23 @@ async fn main() -> Result<()> {
     } else {
         SlfIndex::new(config_dir.join("dotfiles")).await?
     };
-
-    match &cli.command {
-        Some(action) => match action {
-            SlfActions::Track { path } => index.add_ref(path).await?,
-            SlfActions::List => {
-                for (name, dotfile) in index.list() {
-                    println!(
-                        "{}: {} -> {}",
-                        name,
-                        dotfile.source().display(),
-                        dotfile.target().display()
-                    );
-                }
+    match cli.command {
+        SlfActions::Track { path } => index.add_ref(&path).await?,
+        SlfActions::List => {
+            for (name, dotfile) in index.list() {
+                println!(
+                    "{}: {} -> {}",
+                    name,
+                    dotfile.source().display(),
+                    dotfile.target().display()
+                );
             }
-            SlfActions::Remove { path } => index.remove_ref(path.to_str().unwrap())?,
-            SlfActions::Sync => index.do_sync().await?,
-        },
-        None => println!("No subcommand was used"),
+        }
+        SlfActions::Remove { path } => index.remove_ref(path.to_str().unwrap())?,
+        SlfActions::Sync => index.do_sync().await?,
+        SlfActions::Suggest => {
+            print_suggestions();
+        }
     }
 
     tokio::fs::write(&index_path, serde_json::to_string(&index)?).await?;

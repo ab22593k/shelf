@@ -27,27 +27,27 @@ Here are some common commands you can use with Shelf:
 
 1. Track a new dotfile:
    ```
-   shelf track /path/to/your/dotfile
+   slf track /path/to/your/dotfile
    ```
 
 2. List all tracked dotfiles:
    ```
-   shelf list
+   slf list
    ```
 
 3. Remove a dotfile from tracking:
    ```
-   shelf remove dotfile_name
+   slf remove dotfile_name
    ```
 
 4. Sync all dotfiles:
    ```
-   shelf sync
+   slf sync
    ```
 
    To sync to a custom directory:
    ```
-   shelf sync --outdir /path/to/custom/directory
+   slf sync --outdir /path/to/custom/directory
    ```
 
 ## Development
