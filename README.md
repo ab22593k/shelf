@@ -45,11 +45,6 @@ Here are some common commands you can use with Shelf:
    slf sync
    ```
 
-   To sync to a custom directory:
-   ```
-   slf sync --outdir /path/to/custom/directory
-   ```
-
 ## Development
 
 To build the project locally:

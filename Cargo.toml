@@ -1,8 +1,11 @@
 [package]
-name = "shelf"
+name = "shlf"
 description = "A command-line tool for managing dotfiles"
 version = "0.2.0"
 edition = "2021"
+license = "MIT"
+repository = "https://github.com/yourusername/shlf"
+documentation = "https://docs.rs/shlf"
 
 [[bin]]
 name = "shelf"
