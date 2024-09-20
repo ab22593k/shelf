@@ -181,8 +181,10 @@ async fn test_sync_creates_symlinks() -> Result<()> {
     assert!(symlink.is_symlink(), "Created file should be a symlink");
 
     let link_target = std::fs::read_link(&symlink)?;
+    let canonical_link_target = link_target.canonicalize()?;
+    let canonical_created_file = created_files[0].canonicalize()?;
     assert_eq!(
-        link_target, created_files[0],
+        canonical_link_target, canonical_created_file,
         "Symlink should point to the original file"
     );
 
