@@ -9,9 +9,14 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(author, version, about, long_about = None)]
+#[command(author, version = "1.0", about, long_about = None)]
 #[command(arg_required_else_help = true)]
-pub struct Slf {
+#[command(disable_version_flag = true)]
+pub struct Shelf {
+    /// Print version information
+    #[arg(short = 'v', long = "version", action = clap::ArgAction::Version)]
+    version: Option<bool>,
+
     #[command(subcommand)]
     pub command: Actions,
 }
@@ -23,7 +28,7 @@ pub enum Actions {
     /// allowing them to be synchronized across different environments.
     /// Multiple files or directories can be specified at once.
     #[command(about = "Track one or more new dotfiles for management")]
-    Track {
+    Add {
         /// Paths to the dotfiles to be tracked
         /// These can be individual files or directories containing dotfiles.
         #[arg(required = true)]
@@ -34,23 +39,24 @@ pub enum Actions {
     /// This command displays a comprehensive list of all dotfiles that are
     /// currently being managed by the system, including their paths and status.
     #[command(about = "List all currently tracked dotfiles")]
-    List,
+    Ls,
 
     /// Remove a tracked dotfile from management
     /// This command stops tracking the specified dotfile, removing it from
     /// the list of managed files without deleting the actual file.
     #[command(about = "Remove a tracked dotfile from management")]
-    Remove {
+    Rm {
         /// Path to the dotfile to be removed from tracking
         /// This should be the path of a currently tracked dotfile.
         path: PathBuf,
     },
 
-    /// Synchronize all tracked dotfiles across environments
-    /// This command ensures that all tracked dotfiles are up-to-date and
-    /// consistent across different systems or backup locations.
-    #[command(about = "Synchronize all tracked dotfiles across environments")]
-    Sync,
+    /// Create symlinks for all tracked dotfiles
+    /// This command creates or updates symlinks in the target directory for all
+    /// tracked dotfiles, ensuring they are linked to their correct locations.
+    #[command(about = "Create symlinks for all tracked dotfiles")]
+    Cp,
+
     /// Suggest commonly used configuration files
     /// This command provides a list of popular dotfiles and configuration
     /// files commonly used across Linux and macOS systems.
@@ -61,7 +67,7 @@ pub enum Actions {
         interactive: bool,
     },
 
-    /// Generate shell completion scripts
+    /// Generate shell completion scripts.
     #[command(about = "Generate shell completion scripts")]
     Completion {
         /// The shell to generate completions for

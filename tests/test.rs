@@ -3,6 +3,7 @@ use shlf::dotfile::Dotfiles;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use tokio::fs;
+
 async fn setup_test_environment() -> Result<(TempDir, Dotfiles)> {
     let temp_dir = TempDir::new()?;
     let config_dir = temp_dir.path().join("shelf");
@@ -26,12 +27,14 @@ async fn create_test_files(dir: &Path, files: &[(&str, &str)]) -> Result<Vec<Pat
     }
     Ok(created_files)
 }
+
 async fn add_test_files_to_index(index: &mut Dotfiles, files: &[PathBuf]) -> Result<()> {
     for file in files {
-        index.add_dotfile(file.to_str().unwrap()).await?;
+        index.add(file.to_str().unwrap()).await?;
     }
     Ok(())
 }
+
 async fn setup_test_index_with_files(
     files: &[(&str, &str)],
 ) -> Result<(TempDir, Dotfiles, Vec<PathBuf>)> {
@@ -49,7 +52,8 @@ async fn test_add_and_list_dotfile() -> Result<()> {
     ];
     files.sort_by(|a, b| a.0.cmp(b.0));
     let (temp_dir, mut index, created_files) = setup_test_index_with_files(&files).await?;
-    let mut dotfiles: Vec<_> = index.list_dotfiles().collect();
+    let dotfiles = index.list();
+    let mut dotfiles: Vec<_> = dotfiles.iter().collect();
     dotfiles.sort_by(|a, b| a.0.cmp(b.0));
 
     assert_eq!(
@@ -93,10 +97,9 @@ async fn test_add_and_list_dotfile() -> Result<()> {
             name, files[i].1, content
         );
     }
-
     // Test adding a file that already exists
-    let result = index.add_dotfile(created_files[0].to_str().unwrap()).await;
-    assert!(result.is_err(), "Adding an existing dotfile should fail");
+    let result = index.add(created_files[0].to_str().unwrap()).await;
+    assert!(result.is_ok(), "Adding an existing dotfile should succeed");
 
     // Cleanup
     drop(index);
@@ -123,7 +126,7 @@ async fn test_add_multiple_dotfiles() -> Result<()> {
     let created_files = create_test_files(temp_dir.path(), &files).await?;
 
     let results = index
-        .add_multiple_dotfiles(created_files.iter().map(|p| p.to_str().unwrap()))
+        .add_multi(created_files.iter().map(|p| p.to_str().unwrap()))
         .await;
 
     assert_eq!(
@@ -137,7 +140,7 @@ async fn test_add_multiple_dotfiles() -> Result<()> {
         assert!(result.is_ok(), "Adding a dotfile failed: {:?}", result);
     }
 
-    let dotfiles = index.list_dotfiles().collect::<Vec<_>>();
+    let dotfiles: Vec<_> = index.dotfiles.iter().collect();
     assert_eq!(
         dotfiles.len(),
         files.len(),
@@ -153,23 +156,10 @@ async fn test_add_duplicate_dotfile() -> Result<()> {
     let (temp_dir, mut index) = setup_test_environment().await?;
     let test_file = create_test_file(temp_dir.path(), ".testrc", "original content").await?;
 
-    index.add_dotfile(test_file.to_str().unwrap()).await?;
-    let result = index.add_dotfile(test_file.to_str().unwrap()).await;
+    index.add(test_file.to_str().unwrap()).await?;
+    let result = index.add(test_file.to_str().unwrap()).await;
 
-    match result {
-        Err(e) => {
-            // Check for a more general error condition
-            assert!(
-                e.to_string().contains("already") || e.to_string().contains("exist"),
-                "Expected error related to duplicate file, got: {}",
-                e
-            );
-        }
-        Ok(_) => {
-            // Use assert! instead of panic! for better test output
-            assert!(false, "Adding a duplicate dotfile should fail");
-        }
-    }
+    assert!(result.is_ok(), "Adding a duplicate dotfile should succeed");
 
     // Verify that the original file still exists and hasn't been modified
     assert!(test_file.exists(), "Original file should still exist");
@@ -193,7 +183,7 @@ async fn test_add_multiple_dotfiles_at_once() -> Result<()> {
     let created_files = create_test_files(temp_dir.path(), &files).await?;
 
     let results = index
-        .add_multiple_dotfiles(created_files.iter().map(|p| p.to_str().unwrap()))
+        .add_multi(created_files.iter().map(|p| p.to_str().unwrap()))
         .await;
 
     assert_eq!(results.len(), 3, "Expected 3 results, one for each file");
@@ -202,7 +192,8 @@ async fn test_add_multiple_dotfiles_at_once() -> Result<()> {
         "All files should be added successfully"
     );
 
-    let dotfiles: Vec<_> = index.list_dotfiles().collect();
+    let dotfiles = index.list().iter().collect::<Vec<_>>();
+
     assert_eq!(dotfiles.len(), 3, "Expected 3 dotfiles to be tracked");
 
     for (file, content) in files.iter() {
@@ -219,25 +210,26 @@ async fn test_add_multiple_dotfiles_at_once() -> Result<()> {
 
     Ok(())
 }
-
 #[tokio::test]
-async fn test_sync_creates_symlinks() -> Result<()> {
+async fn test_link_creates_copies() -> Result<()> {
     let files = [(".testrc", "test content")];
-    let (temp_dir, mut index, created_files) = setup_test_index_with_files(&files).await?;
-    index.sync_dotfiles().await?;
+    let (temp_dir, index, created_files) = setup_test_index_with_files(&files).await?;
+    index.copy().await?;
 
     let target_dir = temp_dir.path().join("shelf").join("dotfiles");
-    let symlink = target_dir.join(".testrc");
+    let copied_file = target_dir.join(".testrc");
 
-    assert!(symlink.exists(), "Symlink should exist after sync");
-    assert!(symlink.is_symlink(), "Created file should be a symlink");
+    assert!(copied_file.exists(), "Copie file should exist after sync");
+    assert!(
+        !copied_file.is_symlink(),
+        "Created file should not be a symlink"
+    );
 
-    let link_target = std::fs::read_link(&symlink)?;
-    let canonical_link_target = link_target.canonicalize()?;
+    let canonical_copied_file = copied_file.canonicalize()?;
     let canonical_created_file = created_files[0].canonicalize()?;
-    assert_eq!(
-        canonical_link_target, canonical_created_file,
-        "Symlink should point to the original file"
+    assert_ne!(
+        canonical_copied_file, canonical_created_file,
+        "Copied file should not be the same as the original file"
     );
 
     // Verify original file still exists and contains the correct content
@@ -251,15 +243,16 @@ async fn test_sync_creates_symlinks() -> Result<()> {
         "Original file content should be unchanged"
     );
 
-    // Verify symlink content matches original file
-    let symlink_content = fs::read_to_string(&symlink).await?;
+    // Verify copied file content matches original file
+    let copied_content = fs::read_to_string(&copied_file).await?;
     assert_eq!(
-        symlink_content, "test content",
-        "Symlink content should match original file"
+        copied_content, "test content",
+        "Copied file content should match original file"
     );
 
     Ok(())
 }
+
 #[tokio::test]
 async fn test_list_returns_correct_info() -> Result<()> {
     let mut files = [
@@ -270,7 +263,7 @@ async fn test_list_returns_correct_info() -> Result<()> {
     files.sort_by(|a, b| a.0.cmp(b.0));
     let (temp_dir, index, created_files) = setup_test_index_with_files(&files).await?;
 
-    let mut dotfiles: Vec<_> = index.list_dotfiles().collect();
+    let mut dotfiles: Vec<_> = index.list().iter().collect();
     dotfiles.sort_by(|a, b| a.0.cmp(b.0));
 
     assert_eq!(
@@ -332,24 +325,136 @@ async fn test_list_returns_correct_info() -> Result<()> {
 async fn test_remove_dotfile() -> Result<()> {
     let (temp_dir, mut index) = setup_test_environment().await?;
     let test_file = create_test_file(temp_dir.path(), ".testrc", "test content").await?;
-    index.add_dotfile(test_file.to_str().unwrap()).await?;
-    index.remove_dotfile(".testrc")?;
+    index.add(test_file.to_str().unwrap()).await?;
+    let remove_results = index.remove_multi(&[".testrc"]);
+    assert!(
+        remove_results.iter().all(|r| r.is_ok()),
+        "Removing dotfile should succeed"
+    );
 
-    let dotfiles = index.list_dotfiles().collect::<Vec<_>>();
+    let dotfiles = index.list().iter().collect::<Vec<_>>();
     assert_eq!(dotfiles.len(), 0);
 
     Ok(())
 }
+
+#[tokio::test]
+async fn test_remove_multiple_dotfiles() -> Result<()> {
+    let (temp_dir, mut index) = setup_test_environment().await?;
+    let files = [
+        (".testrc1", "test content 1"),
+        (".testrc2", "test content 2"),
+        (".testrc3", "test content 3"),
+    ];
+    let created_files = create_test_files(temp_dir.path(), &files).await?;
+    add_test_files_to_index(&mut index, &created_files).await?;
+
+    // Remove two of the three dotfiles
+    let result = index.remove_multi(&[".testrc1", ".testrc2"]);
+    assert!(
+        result.iter().all(|r| r.is_ok()),
+        "Removing multiple dotfiles should succeed"
+    );
+
+    let remaining_dotfiles = index.list();
+    assert_eq!(
+        remaining_dotfiles.len(),
+        1,
+        "Should have one remaining dotfile"
+    );
+    assert!(
+        remaining_dotfiles.contains_key(".testrc3"),
+        "The remaining dotfile should be .testrc3"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_remove_nonexistent_dotfiles() -> Result<()> {
+    let (temp_dir, mut index) = setup_test_environment().await?;
+    let test_file = create_test_file(temp_dir.path(), ".testrc", "test content").await?;
+    index.add(test_file.to_str().unwrap()).await?;
+    let result = index.remove_multi(&[".testrc", "nonexistent1", "nonexistent2"]);
+
+    assert_eq!(result.len(), 3, "Expected three results");
+    assert!(
+        result[0].is_ok(),
+        "Removing existing dotfile should succeed"
+    );
+    assert!(result[1].is_err(), "Removing nonexistent1 should fail");
+    assert!(result[2].is_err(), "Removing nonexistent2 should fail");
+
+    let error_messages: Vec<String> = result
+        .iter()
+        .filter_map(|r| r.as_ref().err().map(|e| e.to_string().to_lowercase()))
+        .collect();
+
+    assert!(
+        error_messages
+            .iter()
+            .any(|msg| msg.contains("not found") || msg.contains("doesn't exist")),
+        "At least one error message should indicate that a dotfile was not found"
+    );
+
+    let remaining_dotfiles = index.list();
+    assert_eq!(
+        remaining_dotfiles.len(),
+        0,
+        "All existing dotfiles should be removed"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_remove_dotfiles_partial_success() -> Result<()> {
+    let (temp_dir, mut index) = setup_test_environment().await?;
+    let files = [
+        (".testrc1", "test content 1"),
+        (".testrc2", "test content 2"),
+    ];
+    let created_files = create_test_files(temp_dir.path(), &files).await?;
+    add_test_files_to_index(&mut index, &created_files).await?;
+    let result = index.remove_multi(&[".testrc1", ".testrc2", "nonexistent"]);
+
+    assert_eq!(result.len(), 3, "Expected three results");
+    assert!(result[0].is_ok(), "Removing .testrc1 should succeed");
+    assert!(result[1].is_ok(), "Removing .testrc2 should succeed");
+    assert!(result[2].is_err(), "Removing nonexistent should fail");
+
+    let error_messages: Vec<String> = result
+        .iter()
+        .filter_map(|r| r.as_ref().err().map(|e| e.to_string().to_lowercase()))
+        .collect();
+
+    assert!(
+        error_messages
+            .iter()
+            .any(|msg| msg.contains("not found") || msg.contains("doesn't exist")),
+        "Error message should indicate that a dotfile was not found"
+    );
+
+    let remaining_dotfiles = index.list();
+    assert_eq!(
+        remaining_dotfiles.len(),
+        0,
+        "All existing dotfiles should be removed"
+    );
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn test_sync_dotfiles() -> Result<()> {
     let (temp_dir, mut index) = setup_test_environment().await?;
     let test_file1 = create_test_file(temp_dir.path(), ".testrc1", "test content 1").await?;
     let test_file2 = create_test_file(temp_dir.path(), ".testrc2", "test content 2").await?;
 
-    index.add_dotfile(&test_file1.to_str().unwrap()).await?;
-    index.add_dotfile(&test_file2.to_str().unwrap()).await?;
+    index.add(&test_file1.to_str().unwrap()).await?;
+    index.add(&test_file2.to_str().unwrap()).await?;
 
-    index.sync_dotfiles().await?;
+    index.copy().await?;
 
     let target_dir = temp_dir.path().join("shelf").join("dotfiles");
     assert!(target_dir.join(".testrc1").exists());
@@ -392,7 +497,7 @@ async fn test_add_nonexistent_file() -> Result<()> {
     let (temp_dir, mut index) = setup_test_environment().await?;
     let nonexistent_file = temp_dir.path().join("nonexistent");
 
-    let result = index.add_dotfile(&nonexistent_file.to_str().unwrap()).await;
+    let result = index.add(&nonexistent_file.to_str().unwrap()).await;
     assert!(result.is_err());
 
     Ok(())
@@ -401,9 +506,128 @@ async fn test_add_nonexistent_file() -> Result<()> {
 #[tokio::test]
 async fn test_remove_nonexistent_dotfile() -> Result<()> {
     let (_, mut index) = setup_test_environment().await?;
+    let result = index.remove_multi(&["nonexistent"]);
 
-    let result = index.remove_dotfile("nonexistent");
-    assert!(result.is_err());
+    assert_eq!(result.len(), 1, "Expected one result");
+    assert!(
+        result[0].is_err(),
+        "Removing nonexistent dotfile should fail"
+    );
+
+    let error_message = result[0].as_ref().unwrap_err().to_string().to_lowercase();
+    assert!(
+        error_message.contains("not found") || error_message.contains("doesn't exist"),
+        "Error message should indicate the dotfile was not found"
+    );
+
+    Ok(())
+}
+#[tokio::test]
+async fn test_file_conflict_handling() -> Result<()> {
+    let (temp_dir, mut index) = setup_test_environment().await?;
+    let test_file = create_test_file(temp_dir.path(), ".testrc", "original content").await?;
+
+    // Add the dotfile to the index
+    index.add(test_file.to_str().unwrap()).await?;
+
+    // Create a conflicting file in the target directory
+    let target_dir = temp_dir.path().join("shelf").join("dotfiles");
+    fs::create_dir_all(&target_dir).await?;
+    let conflicting_file = target_dir.join(".testrc");
+    fs::write(&conflicting_file, "conflicting content").await?;
+
+    // Copy dotfiles, which should overwrite the conflicting file
+    index.copy().await?;
+
+    // Verify that the file exists and contains the correct content
+    let copied_file = target_dir.join(".testrc");
+    assert!(copied_file.exists(), "Copied file should exist");
+    assert!(
+        !copied_file.is_symlink(),
+        "Copied file should not be a symlink"
+    );
+
+    let copied_content = fs::read_to_string(&copied_file).await?;
+    assert_eq!(
+        copied_content, "original content",
+        "Copied file should contain the original content, overwriting the conflicting content"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_update_existing_dotfile() -> Result<()> {
+    let (temp_dir, mut index) = setup_test_environment().await?;
+    let initial_file = create_test_file(temp_dir.path(), ".testrc", "initial content").await?;
+    index.add(initial_file.to_str().unwrap()).await?;
+
+    let updated_file = create_test_file(temp_dir.path(), ".testrc", "updated content").await?;
+    index.add(updated_file.to_str().unwrap()).await?;
+
+    let dotfiles: Vec<_> = index.list().iter().collect();
+    assert_eq!(dotfiles.len(), 1, "Should still have only one dotfile");
+
+    let (_, entry) = dotfiles[0];
+    let content = fs::read_to_string(&entry.source).await?;
+    assert_eq!(content, "updated content", "Content should be updated");
+
+    Ok(())
+}
+#[tokio::test]
+async fn test_link_nested_dotfiles() -> Result<()> {
+    let (temp_dir, mut index) = setup_test_environment().await?;
+    let nested_dir = temp_dir.path().join("nested");
+    fs::create_dir_all(&nested_dir).await?;
+
+    let nested_file = create_test_file(&nested_dir, ".nestedrc", "nested content").await?;
+    index.add(nested_file.to_str().unwrap()).await?;
+
+    index.copy().await?;
+
+    let target_dir = temp_dir.path().join("shelf").join("dotfiles");
+    let copied_file = target_dir.join(".nestedrc");
+
+    assert!(
+        copied_file.exists(),
+        "Copied file for nested file should exist"
+    );
+    assert!(
+        !copied_file.is_symlink(),
+        "Copied file should not be a symlink"
+    );
+    let content = fs::read_to_string(&copied_file).await?;
+    assert_eq!(
+        content, "nested content",
+        "Copied file content should match"
+    );
+
+    Ok(())
+}
+#[tokio::test]
+async fn test_handle_broken_symlinks() -> Result<()> {
+    let (temp_dir, mut index) = setup_test_environment().await?;
+    let test_file = create_test_file(temp_dir.path(), ".testrc", "test content").await?;
+    index.add(test_file.to_str().unwrap()).await?;
+
+    // Create a file in the target directory (simulating a broken symlink scenario)
+    let target_dir = temp_dir.path().join("shelf").join("dotfiles");
+    let existing_file = target_dir.join(".testrc");
+    fs::create_dir_all(&target_dir).await?;
+    fs::write(&existing_file, "old content").await?;
+
+    index.copy().await?;
+
+    assert!(existing_file.exists(), "Copied file should exist");
+    assert!(
+        !existing_file.is_symlink(),
+        "Copied file should not be a symlink"
+    );
+    let content = fs::read_to_string(&existing_file).await?;
+    assert_eq!(
+        content, "test content",
+        "Copied file should contain the correct content, overwriting the old content"
+    );
 
     Ok(())
 }

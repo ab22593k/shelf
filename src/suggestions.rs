@@ -1,6 +1,8 @@
 //! This module provides functionality for managing and suggesting common dotfiles.
 //! It includes methods for listing, displaying, and interactively selecting dotfiles.
 
+use crate::dotfile::Dotfiles;
+use anyhow::Result;
 use std::collections::HashMap;
 
 /// Represents a collection of dotfile suggestions organized by categories.
@@ -209,4 +211,24 @@ pub fn print_suggestions() {
 
 pub fn interactive_selection() -> Result<Vec<String>, Box<dyn std::error::Error>> {
     Suggestions::new().interactive_selection()
+}
+
+pub async fn suggest_dotfiles(index: &mut Dotfiles, interactive: bool) -> Result<()> {
+    if interactive {
+        match interactive_selection() {
+            Ok(selected_files) => {
+                for file in selected_files {
+                    let expanded_path = shellexpand::tilde(&file);
+                    match index.add(expanded_path.as_ref()).await {
+                        Ok(_) => println!("Added: {}", file),
+                        Err(e) => eprintln!("Failed to add {}: {}", file, e),
+                    }
+                }
+            }
+            Err(e) => eprintln!("Error during interactive selection: {}", e),
+        }
+    } else {
+        print_suggestions();
+    }
+    Ok(())
 }

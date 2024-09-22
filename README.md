@@ -20,23 +20,22 @@ Once you have Rust and Cargo installed, you can build and install Shelf using th
 ```
 cargo install --path .
 ```
-
 ## Usage
 
 Shelf provides several commands to manage your dotfiles:
 
 ```bash
-# Track a new dotfile
-shlf track ~/.bashrc
+# Add a new dotfile to track
+shlf add ~/.bashrc
 
 # List all tracked dotfiles
-shlf list
+shlf ls
 
 # Remove a dotfile from tracking
-shlf remove .bashrc
+shlf rm .bashrc
 
-# Sync all dotfiles
-shlf sync
+# Create symlinks for all tracked dotfiles
+shlf link
 
 # Interactive selection of dotfiles to track
 shlf suggest
@@ -46,6 +45,12 @@ shlf --help
 ```
 
 Each command can be run with `-h` or `--help` for more information.
+
+# Push dotfiles to a remote Git repository
+shlf push --repo username/dotfiles --token your_access_token --branch main
+
+# Pull dotfiles from a remote Git repository
+shlf pull
 
 ## Shell Completion
 
@@ -69,7 +74,7 @@ To use the completion scripts:
   source /path/to/shlf.bash
   ```
 
-- For Zsh, place the `_shlf` file in `~/.zfunc`.
+- For Zsh, place the `_shlf` file in `~/.zfunc`, don't forget to add `source ~/.zfunc/*` in `~/.zshrc`.
 
 - For Fish, place the `shlf.fish` file in `~/.config/fish/completions`.
 
@@ -88,14 +93,13 @@ To run tests:
 ```
 cargo test
 ```
-
 To run the project directly without installing:
 
 ```
-cargo run -- [ARGUMENTS]
+cargo run -- [SUBCOMMAND]
 ```
 
-Replace `[ARGUMENTS]` with the command you want to run, such as `track`, `list`, `remove`, or `sync`.
+Replace `[SUBCOMMAND]` with the command you want to run, such as `add`, `ls`, `rm`, or `link`.
 
 ## Contributing
 
