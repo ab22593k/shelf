@@ -45,24 +45,47 @@ impl Suggestions {
                         "~/.bash_profile",
                         "~/.bash_aliases",
                         "~/.zprofile",
+                        "~/.config/fish/config.fish",
+                        "~/.tcshrc",
+                        "~/.cshrc",
+                        "~/.kshrc",
+                        "~/.config/xonsh/rc.xsh",
+                        "~/.config/ion/initrc",
+                        "~/.config/elvish/rc.elv",
+                        "~/.config/nushell/config.nu",
+                        "~/.config/PowerShell/Microsoft.PowerShell_profile.ps1",
+                        "~/.yashrc",
+                        "~/.mkshrc",
+                        "~/.config/oil/oshrc",
                     ],
                 },
                 Category {
-                    name: "Git",
+                    name: "VCS",
                     files: vec![
+                        // Git
                         "~/.gitconfig",
                         "~/.gitignore_global",
                         "~/.gitmessage",
                         "~/.gitattributes",
+                        // Mercurial
+                        "~/.hgrc",
+                        "~/.hgignore_global",
+                        // Subversion
+                        "~/.subversion/config",
+                        "~/.subversion/servers",
+                        // Bazaar
+                        "~/.bazaar/bazaar.conf",
+                        "~/.bazaar/ignore",
+                        // Fossil
+                        "~/.fossil",
+                        // Perforce
+                        "~/.p4config",
+                        // CVS
+                        "~/.cvsrc",
+                        // Darcs
+                        "~/.darcs/author",
+                        "~/.darcs/defaults",
                     ],
-                },
-                Category {
-                    name: "Vim",
-                    files: vec!["~/.vimrc", "~/.vim/", "~/.config/nvim/init.vim"],
-                },
-                Category {
-                    name: "Emacs",
-                    files: vec!["~/.emacs", "~/.emacs.d/init.el", "~/.doom.d/config.el"],
                 },
                 Category {
                     name: "Tmux",
@@ -85,11 +108,54 @@ impl Suggestions {
                     ],
                 },
                 Category {
-                    name: "IDE",
+                    name: "Editors",
                     files: vec![
+                        // Vim
+                        "~/.vimrc",
+                        "~/.vim/",
+                        "~/.config/nvim/init.vim",
+                        // Emacs
+                        "~/.emacs",
+                        "~/.emacs.d/init.el",
+                        "~/.doom.d/config.el",
+                        // VS Code
                         "~/.vscode/settings.json",
-                        "~/.idea/config/options/",
+                        "~/.config/Code/User/settings.json",
+                        // JetBrains IDEs
+                        "~/.ideavimrc",
+                        "~/.intellij/config/options/",
+                        // Sublime Text
                         "~/.config/sublime-text-3/Packages/User/Preferences.sublime-settings",
+                        // Atom
+                        "~/.atom/config.cson",
+                        // Nano
+                        "~/.nanorc",
+                        // Notepad++
+                        "~/AppData/Roaming/Notepad++/config.xml",
+                        // Gedit
+                        "~/.config/gedit/preferences.xml",
+                        // Kate
+                        "~/.config/katerc",
+                        // TextMate
+                        "~/Library/Application Support/TextMate/Bundles",
+                        // BBEdit
+                        "~/Library/Application Support/BBEdit/Setup",
+                        // Brackets
+                        "~/.brackets.json",
+                        // Geany
+                        "~/.config/geany/geany.conf",
+                        // Komodo
+                        "~/.komodoedit/X.Y/prefs.xml",
+                        // Light Table
+                        "~/.lighttable/settings.json",
+                        // Coda
+                        "~/Library/Application Support/Coda 2/",
+                        // jEdit
+                        "~/.jedit/properties",
+                        // Eclipse
+                        "~/.eclipse/org.eclipse.platform_*/configuration/config.ini",
+                        // NetBeans
+                        "~/.netbeans/X.Y/config/Preferences/org/netbeans/core/options/optionsfile.properties",
                     ],
                 },
                 Category {
