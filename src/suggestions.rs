@@ -3,7 +3,6 @@
 
 use crate::dotfile::Dotfiles;
 use anyhow::Result;
-use std::collections::HashMap;
 
 /// Represents a collection of dotfile suggestions organized by categories.
 ///
@@ -33,7 +32,7 @@ impl Suggestions {
     /// # Returns
     ///
     /// A new `Suggestions` instance containing predefined categories and dotfiles.
-    fn new() -> Self {
+    pub fn new() -> Self {
         Suggestions {
             categories: vec![
                 Category {
@@ -170,22 +169,6 @@ impl Suggestions {
         }
     }
 
-    /// Returns a HashMap of common dotfiles grouped by category.
-    ///
-    /// This method creates a HashMap where the keys are category names and the values
-    /// are vectors of file paths associated with each category. It provides a convenient
-    /// way to access all the suggested dotfiles organized by their respective categories.
-    ///
-    /// # Returns
-    ///
-    /// A HashMap where keys are category names (&str) and values are vectors of file paths (Vec<&str>).
-    pub fn get_common_dotfiles(&self) -> HashMap<&'static str, Vec<&'static str>> {
-        self.categories
-            .iter()
-            .map(|cat| (cat.name, cat.files.clone()))
-            .collect()
-    }
-
     /// Prints all suggested dotfiles grouped by category.
     ///
     /// This method displays a formatted list of all dotfile suggestions,
@@ -208,11 +191,13 @@ impl Suggestions {
     ///   ...
     /// ```
     pub fn print_suggestions(&self) {
-        println!("Suggested dotfiles to track:");
+        use colored::*;
+
+        println!("{}", "Suggested dotfiles to track:".bold().underline());
         for category in &self.categories {
-            println!("\n{}:", category.name);
+            println!("\n{}:", category.name.green().bold());
             for file in &category.files {
-                println!("  {}", file);
+                println!("  {}", file.cyan());
             }
         }
     }
@@ -265,36 +250,30 @@ impl Suggestions {
 
         Ok(selected_files)
     }
-}
 
-pub fn get_common_dotfiles() -> HashMap<&'static str, Vec<&'static str>> {
-    Suggestions::new().get_common_dotfiles()
-}
+    pub async fn render(&self, index: &mut Dotfiles, interactive: bool) -> Result<()> {
+        use colored::*;
 
-pub fn print_suggestions() {
-    Suggestions::new().print_suggestions()
-}
-
-pub fn interactive_selection() -> Result<Vec<String>, Box<dyn std::error::Error>> {
-    Suggestions::new().interactive_selection()
-}
-
-pub async fn suggest_dotfiles(index: &mut Dotfiles, interactive: bool) -> Result<()> {
-    if interactive {
-        match interactive_selection() {
-            Ok(selected_files) => {
-                for file in selected_files {
-                    let expanded_path = shellexpand::tilde(&file);
-                    match index.add(expanded_path.as_ref()).await {
-                        Ok(_) => println!("Added: {}", file),
-                        Err(e) => eprintln!("Failed to add {}: {}", file, e),
+        if interactive {
+            match self.interactive_selection() {
+                Ok(selected_files) => {
+                    for file in selected_files {
+                        let expanded_path = shellexpand::tilde(&file);
+                        match index.add(expanded_path.as_ref()).await {
+                            Ok(_) => println!("{} {}", "Added:".green().bold(), file),
+                            Err(e) => eprintln!("{} {}: {}", "Failed to add".red().bold(), file, e),
+                        }
                     }
                 }
+                Err(e) => eprintln!(
+                    "{} {}",
+                    "Error during interactive selection:".red().bold(),
+                    e
+                ),
             }
-            Err(e) => eprintln!("Error during interactive selection: {}", e),
+        } else {
+            self.print_suggestions();
         }
-    } else {
-        print_suggestions();
+        Ok(())
     }
-    Ok(())
 }

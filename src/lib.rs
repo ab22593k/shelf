@@ -1,15 +1,14 @@
-#![allow(clippy::nonminimal_bool)]
-
-pub mod dotfile;
-pub mod suggestions;
-
-use clap_complete::Shell;
-
-use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
+use clap::{arg, command, Parser, Subcommand};
+use clap_complete::Shell;
+
+pub mod dotfile;
+pub mod github;
+pub mod suggestions;
+
 #[derive(Parser)]
-#[command(author, version = "1.0", about, long_about = None)]
+#[command(author, about, long_about = None)]
 #[command(arg_required_else_help = true)]
 #[command(disable_version_flag = true)]
 pub struct Shelf {
@@ -38,14 +37,14 @@ pub enum Actions {
     /// List all currently tracked dotfiles
     /// This command displays a comprehensive list of all dotfiles that are
     /// currently being managed by the system, including their paths and status.
-    #[command(about = "List all currently tracked dotfiles")]
-    Ls,
+    #[command(name = "ls", about = "List all currently tracked dotfiles")]
+    List,
 
     /// Remove a tracked dotfile from management
     /// This command stops tracking the specified dotfile, removing it from
     /// the list of managed files without deleting the actual file.
-    #[command(about = "Remove a tracked dotfile from management")]
-    Rm {
+    #[command(name = "rm", about = "Remove a tracked dotfile from management")]
+    Remove {
         /// Path to the dotfile to be removed from tracking
         /// This should be the path of a currently tracked dotfile.
         path: PathBuf,
@@ -54,8 +53,21 @@ pub enum Actions {
     /// Create symlinks for all tracked dotfiles
     /// This command creates or updates symlinks in the target directory for all
     /// tracked dotfiles, ensuring they are linked to their correct locations.
-    #[command(about = "Create symlinks for all tracked dotfiles")]
-    Cp,
+    #[command(name = "cp", about = "Create symlinks for all tracked dotfiles")]
+    Copy,
+
+    /// Repository operations for syncing dotfiles
+    #[command(about = "Repository operations for syncing dotfiles")]
+    Repo {
+        #[arg(required = true)]
+        path: PathBuf,
+
+        #[arg(long, conflicts_with = "pull")]
+        push: bool,
+
+        #[arg(long, conflicts_with = "push")]
+        pull: bool,
+    },
 
     /// Suggest commonly used configuration files
     /// This command provides a list of popular dotfiles and configuration

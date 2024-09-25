@@ -1,7 +1,10 @@
+#![allow(clippy::nonminimal_bool)]
+
 use anyhow::{anyhow, Result};
 use clap::{CommandFactory, Parser};
-use shlf::{dotfile::Dotfiles, suggestions::suggest_dotfiles, Actions, Shelf};
-use std::path::{Path, PathBuf};
+use shlf::{dotfile, suggestions::Suggestions, Actions, Shelf};
+
+pub use dotfile::Dotfiles;
 
 use clap_complete::{generate, Generator};
 use std::io;
@@ -13,22 +16,26 @@ fn print_completions<G: Generator>(gen: G, cmd: &mut clap::Command) {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Shelf::parse();
-    let config_dir = get_config_directory()?;
-    let index_path = config_dir.join("index.json");
-    let mut index = load_or_create_index(&config_dir, &index_path).await?;
+    let target_directory = std::path::PathBuf::from("~/.config/shelf");
+    let mut index = Dotfiles::new(target_directory).await?;
+
     match cli.command {
         Actions::Add { paths } => {
             index.add_multi(paths).await;
         }
-        Actions::Ls => index.print_list(),
-        Actions::Rm { path } => {
+        Actions::List => index.print_list(),
+        Actions::Remove { path } => {
             let results = index.remove_multi(&[path.to_str().unwrap()]);
             if results.iter().any(|r| r.is_err()) {
                 return Err(anyhow!("Failed to remove one or more dotfiles"));
             }
         }
-        Actions::Cp => index.copy().await?,
-        Actions::Suggest { interactive } => suggest_dotfiles(&mut index, interactive).await?,
+        Actions::Copy => index.copy().await?,
+        Actions::Repo { path, push, pull } => {}
+        Actions::Suggest { interactive } => {
+            Suggestions::new().render(&mut index, interactive).await?
+        }
+
         Actions::Completion { shell } => {
             let mut cmd = Shelf::command();
             print_completions(shell, &mut cmd);
@@ -36,28 +43,6 @@ async fn main() -> Result<()> {
         }
     }
 
-    index.save(&index_path).await?;
+    index.save(&index.target_directory).await?;
     Ok(())
-}
-
-fn get_config_directory() -> Result<PathBuf> {
-    let config_dir = dirs::config_dir()
-        .ok_or_else(|| anyhow!("Failed to get config directory"))?
-        .join("shelf");
-    std::fs::create_dir_all(&config_dir)?;
-    Ok(config_dir)
-}
-
-async fn load_or_create_index(config_dir: &Path, index_path: &Path) -> Result<Dotfiles> {
-    if index_path.exists() {
-        match tokio::fs::read_to_string(index_path).await {
-            Ok(contents) => match serde_json::from_str(&contents) {
-                Ok(index) => Ok(index),
-                Err(_) => Dotfiles::new(config_dir.join("dotfiles")).await,
-            },
-            Err(_) => Dotfiles::new(config_dir.join("dotfiles")).await,
-        }
-    } else {
-        Dotfiles::new(config_dir.join("dotfiles")).await
-    }
 }

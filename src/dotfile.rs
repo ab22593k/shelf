@@ -10,8 +10,10 @@ use serde::{Deserialize, Serialize};
 use tokio::fs;
 
 use std::collections::HashMap;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+
+use crate::github::{RemoteHost, RemoteRepos};
 
 /// Represents a collection of dotfiles with their metadata and operations.
 ///
@@ -23,13 +25,11 @@ use std::time::SystemTime;
 ///
 /// * `dotfiles` - A HashMap containing DotfileEntry instances, keyed by their names.
 /// * `target_directory` - The directory where symlinks to the dotfiles will be created.
-/// * `last_update` - The timestamp of the last update to the dotfiles collection.
-/// * `version` - The version string of the dotfile manager.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Dotfiles {
-    pub dotfiles: HashMap<String, DotfileEntry>,
-    pub outdire: PathBuf,
-    pub version: String,
+    pub dotfiles: HashMap<String, Index>,
+    pub target_directory: PathBuf,
+    pub config: RemoteHost,
 }
 
 /// Represents a single dotfile entry with its source path and index information.
@@ -40,64 +40,77 @@ pub struct Dotfiles {
 /// # Fields
 ///
 /// * `source` - The source path of the dotfile.
-/// * `index` - An IndexEntry containing metadata about the dotfile.
+/// * `inode` - The inode number of the dotfile.
+/// * `version` - The version of the dotfile manager.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DotfileEntry {
+pub struct Index {
     pub source: PathBuf,
-    pub index: IndexEntry,
+    pub inode: u64,
+    version: u8,
 }
 
-/// Stores metadata about a dotfile for tracking changes.
-///
-/// This struct contains information used to determine if a dotfile has been
-/// modified since the last sync operation.
-///
-/// # Fields
-///
-/// * `timestamp` - The last modification time of the dotfile.
-/// * `file_size` - The size of the dotfile in bytes.
-/// * `hash` - A SHA-256 hash of the dotfile's contents.
-/// * `inode` - The inode number of the dotfile.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct IndexEntry {
-    pub timestamp: SystemTime,
-    pub inode: u64,
+impl Index {
+    pub fn new(source: PathBuf, inode: u64, version: u8) -> Self {
+        Self {
+            source,
+            inode,
+            version,
+        }
+    }
+
+    pub fn update_ino(&mut self, inode: u64) {
+        self.inode = inode;
+    }
+
+    pub fn inc_version(&mut self) {
+        self.version = self.version.wrapping_add(1);
+    }
+
+    pub fn get_source(&self) -> &PathBuf {
+        &self.source
+    }
+
+    pub fn get_inode(&self) -> u64 {
+        self.inode
+    }
+
+    pub fn get_version(&self) -> u8 {
+        self.version
+    }
 }
 
 /// A type alias for the iterator returned by `list_dotfiles`.
-pub type DotfileIterator<'a> = std::collections::hash_map::Iter<'a, String, DotfileEntry>;
+pub type DotfileIterator<'a> = std::collections::hash_map::Iter<'a, String, Index>;
+async fn copy_dir_recursive(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> Result<()> {
+    let src = src.as_ref();
+    let dst = dst.as_ref();
 
-impl Dotfiles {
-    /// Updates the index entry for a dotfile.
-    ///
-    /// This method updates the timestamp, file size, and hash of the dotfile in its index entry.
-    /// It reads the file contents and calculates a new SHA-256 hash.
-    ///
-    /// # Arguments
-    ///
-    /// * `dotfile` - A mutable reference to the DotfileEntry to update.
-    ///
-    /// # Returns
-    ///
-    /// * `Result<()>` - Ok(()) if the update was successful, or an error if it failed.
-    async fn update_index_entry(dotfile: &mut DotfileEntry) -> Result<()> {
-        let metadata = fs::metadata(&dotfile.source).await?;
-        dotfile.index.timestamp = metadata.modified()?;
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::MetadataExt;
-            dotfile.index.inode = metadata.ino();
-        }
-        #[cfg(windows)]
-        {
-            use std::os::windows::fs::MetadataExt;
-            dotfile.index.inode = metadata.file_index().unwrap_or(0);
-        }
-
-        Ok(())
+    if !src.is_dir() {
+        return Err(anyhow::anyhow!("Source is not a directory"));
     }
 
+    if !dst.exists() {
+        fs::create_dir_all(dst).await?;
+    }
+
+    let mut dir = fs::read_dir(src).await?;
+    while let Some(entry) = dir.next_entry().await? {
+        let entry_path = entry.path();
+        let file_name = entry.file_name();
+        let dst_path = dst.join(file_name);
+
+        if entry_path.is_dir() {
+            let recursive_copy = Box::pin(copy_dir_recursive(&entry_path, &dst_path));
+            recursive_copy.await?;
+        } else {
+            fs::copy(&entry_path, &dst_path).await?;
+        }
+    }
+
+    Ok(())
+}
+
+impl Dotfiles {
     /// Creates a new instance of Dotfiles.
     ///
     /// This method initializes a new Dotfiles struct with an empty HashMap for dotfiles,
@@ -111,17 +124,18 @@ impl Dotfiles {
     /// # Returns
     ///
     /// * `Result<Self>` - Ok(Dotfiles) if initialization was successful, or an error if it failed.
-    pub async fn new<P: AsRef<Path>>(target_directory: P) -> Result<Self> {
-        let target_directory = target_directory.as_ref().to_path_buf();
+    pub async fn new(target_directory: PathBuf) -> Result<Self> {
         fs::create_dir_all(&target_directory)
             .await
             .context("Failed to create target directory")?;
 
-        Ok(Self {
+        let shelf = Self {
             dotfiles: HashMap::new(),
-            outdire: target_directory,
-            version: env!("CARGO_PKG_VERSION").to_string(),
-        })
+            target_directory,
+            config: RemoteHost::new(RemoteRepos::Github, String::new()),
+        };
+
+        Ok(shelf)
     }
 
     /// Adds a new dotfile to the collection.
@@ -140,8 +154,8 @@ impl Dotfiles {
     /// # Returns
     ///
     /// * `Result<()>` - Ok(()) if the dotfile was added successfully, or an error if it failed.
-    pub async fn add<P: AsRef<Path>>(&mut self, source: P) -> Result<()> {
-        let source = source.as_ref().to_path_buf();
+    pub async fn add<P: AsRef<Path>>(&mut self, file: P) -> Result<()> {
+        let source = file.as_ref().to_path_buf();
         let name = source
             .file_name()
             .and_then(|os_str| os_str.to_str())
@@ -161,22 +175,20 @@ impl Dotfiles {
             source.display().to_string().cyan()
         ))?;
 
-        let mut dotfile_entry = DotfileEntry {
+        let metadata = fs::metadata(&source).await?;
+        let index = Index {
             source: source.clone(),
-            index: IndexEntry {
-                timestamp: SystemTime::now(),
-                inode: 0,
-            },
+            inode: metadata.ino(),
+            version: 1,
         };
 
-        Self::update_index_entry(&mut dotfile_entry).await?;
-
-        self.dotfiles.insert(name.clone(), dotfile_entry);
+        self.dotfiles.insert(name.clone(), index);
         println!(
             "{} Added dotfile: {}",
             "Success:".green().bold(),
             name.cyan()
         );
+
         Ok(())
     }
 
@@ -195,12 +207,13 @@ impl Dotfiles {
     /// # Returns
     ///
     /// * `Vec<Result<()>>` - A vector of results, one for each dotfile attempted to be removed.
-    pub fn remove_multi(&mut self, names: &[&str]) -> Vec<Result<()>> {
+    pub fn remove_multi(&mut self, fnames: &[&str]) -> Vec<Result<()>> {
         let mut results = Vec::new();
-        for name in names {
-            let result = self.remove_single(name);
+        for fname in fnames {
+            let result = self.remove_single(fname);
             results.push(result);
         }
+
         results
     }
 
@@ -213,7 +226,7 @@ impl Dotfiles {
             )
         })?;
 
-        let target = self.outdire.join(name);
+        let target = self.target_directory.join(name);
         if target.exists() {
             std::fs::remove_file(&target).context(format!(
                 "{} Failed to remove file for dotfile: {}",
@@ -234,19 +247,6 @@ impl Dotfiles {
         }
 
         Ok(())
-    }
-
-    /// Returns an iterator over all dotfiles in the collection.
-    ///
-    /// This method provides a way to iterate over all the dotfiles stored in the
-    /// Dotfiles struct. It returns an iterator that yields tuples containing
-    /// references to the dotfile name (as a String) and its corresponding DotfileEntry.
-    ///
-    /// # Returns
-    ///
-    /// * A reference to the HashMap of dotfiles.
-    pub fn list(&self) -> &HashMap<String, DotfileEntry> {
-        &self.dotfiles
     }
 
     /// Prints a formatted list of all tracked dotfiles.
@@ -281,12 +281,12 @@ impl Dotfiles {
         let total_count = self.dotfiles.len();
 
         for (name, dotfile) in &self.dotfiles {
-            let target_path = self.outdire.join(name);
+            let target_path = self.target_directory.join(name);
 
             if !dotfile.source.exists() {
-                println!(
+                eprintln!(
                     "{} Source file does not exist: {}",
-                    "Warning:".yellow().bold(),
+                    "Error:".red().bold(),
                     dotfile.source.display()
                 );
                 continue;
@@ -294,19 +294,32 @@ impl Dotfiles {
 
             // Create parent directory if it doesn't exist
             if let Some(parent) = target_path.parent() {
-                if let Err(e) = fs::create_dir_all(parent).await {
+                fs::create_dir_all(parent).await?;
+            }
+
+            // Handle existing files, directories, or symlinks
+            if target_path.exists() || target_path.symlink_metadata().is_ok() {
+                if target_path.is_symlink() {
+                    fs::remove_file(&target_path).await?;
+                } else if target_path.is_dir() {
+                    fs::remove_dir_all(&target_path).await?;
+                } else {
+                    // Backup existing file
+                    let backup_path = target_path.with_extension("bak");
+                    fs::rename(&target_path, &backup_path).await?;
                     println!(
-                        "{} Failed to create directory {}: {}",
-                        "Error:".red().bold(),
-                        parent.display(),
-                        e
+                        "{} Backed up existing file: {} -> {}",
+                        "Info:".blue().bold(),
+                        target_path.display(),
+                        backup_path.display()
                     );
-                    continue;
                 }
             }
 
-            // Copy the file
-            match fs::copy(&dotfile.source, &target_path).await {
+            // Copy the file or directory
+            let copy_result = fs::copy(&dotfile.source, &target_path).await.map(|_| ());
+
+            match copy_result {
                 Ok(_) => {
                     println!(
                         "{} Copied: {} -> {}",
@@ -317,7 +330,7 @@ impl Dotfiles {
                     success_count += 1;
                 }
                 Err(e) => {
-                    println!(
+                    eprintln!(
                         "{} Failed to copy {}: {}",
                         "Error:".red().bold(),
                         dotfile.source.display(),
