@@ -22,7 +22,7 @@ struct Category {
     files: Vec<&'static str>,
 }
 
-impl Suggestions {
+impl Default for Suggestions {
     /// Creates a new `Suggestions` instance with predefined categories and dotfiles.
     ///
     /// This method initializes the `Suggestions` struct with a set of common dotfile
@@ -32,8 +32,8 @@ impl Suggestions {
     /// # Returns
     ///
     /// A new `Suggestions` instance containing predefined categories and dotfiles.
-    pub fn new() -> Self {
-        Suggestions {
+    fn default() -> Self {
+        Self {
             categories: vec![
                 Category {
                     name: "Shell",
@@ -168,7 +168,9 @@ impl Suggestions {
             ],
         }
     }
+}
 
+impl Suggestions {
     /// Prints all suggested dotfiles grouped by category.
     ///
     /// This method displays a formatted list of all dotfile suggestions,

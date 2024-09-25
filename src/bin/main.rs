@@ -33,7 +33,9 @@ async fn main() -> Result<()> {
         Actions::Copy => index.copy().await?,
         Actions::Repo { path, push, pull } => {}
         Actions::Suggest { interactive } => {
-            Suggestions::new().render(&mut index, interactive).await?
+            Suggestions::default()
+                .render(&mut index, interactive)
+                .await?
         }
 
         Actions::Completion { shell } => {
