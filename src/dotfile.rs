@@ -79,37 +79,6 @@ impl Index {
     }
 }
 
-/// A type alias for the iterator returned by `list_dotfiles`.
-pub type DotfileIterator<'a> = std::collections::hash_map::Iter<'a, String, Index>;
-async fn copy_dir_recursive(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> Result<()> {
-    let src = src.as_ref();
-    let dst = dst.as_ref();
-
-    if !src.is_dir() {
-        return Err(anyhow::anyhow!("Source is not a directory"));
-    }
-
-    if !dst.exists() {
-        fs::create_dir_all(dst).await?;
-    }
-
-    let mut dir = fs::read_dir(src).await?;
-    while let Some(entry) = dir.next_entry().await? {
-        let entry_path = entry.path();
-        let file_name = entry.file_name();
-        let dst_path = dst.join(file_name);
-
-        if entry_path.is_dir() {
-            let recursive_copy = Box::pin(copy_dir_recursive(&entry_path, &dst_path));
-            recursive_copy.await?;
-        } else {
-            fs::copy(&entry_path, &dst_path).await?;
-        }
-    }
-
-    Ok(())
-}
-
 impl Dotfiles {
     /// Creates a new instance of Dotfiles.
     ///
@@ -132,7 +101,7 @@ impl Dotfiles {
         let shelf = Self {
             dotfiles: HashMap::new(),
             target_directory,
-            config: RemoteHost::new(RemoteRepos::Github, String::new()),
+            config: RemoteHost::new(RemoteRepos::Github, String::new())?,
         };
 
         Ok(shelf)

@@ -4,6 +4,7 @@ use tempfile::TempDir;
 use tokio::fs;
 
 use shlf::dotfile::Dotfiles;
+
 async fn setup_test_environment() -> Result<(TempDir, Dotfiles)> {
     let temp_dir = TempDir::new()?;
     let config_dir = temp_dir.path().join("shelf");
@@ -13,6 +14,9 @@ async fn setup_test_environment() -> Result<(TempDir, Dotfiles)> {
 
     // Ensure the target directory is accessible
     fs::metadata(&absolute_target_dir).await?;
+
+    // Set a mock GitHub token for testing
+    std::env::set_var("GITHUB_TOKEN", "mock_token_for_testing");
 
     let index = Dotfiles::new(absolute_target_dir).await?;
     Ok((temp_dir, index))
@@ -160,6 +164,7 @@ async fn test_add_multiple_dotfiles() -> Result<()> {
 
     Ok(())
 }
+
 #[tokio::test]
 async fn test_add_duplicate_dotfile() -> Result<()> {
     let (temp_dir, mut index) = setup_test_environment().await?;
@@ -223,18 +228,6 @@ async fn test_add_multiple_dotfiles_at_once() -> Result<()> {
 async fn test_link_creates_copies() -> Result<()> {
     let files = [(".testrc", "test content")];
     let (temp_dir, index, created_files) = setup_test_index_with_files(&files).await?;
-    let source_file = created_files[0].canonicalize()?;
-    let target_dir = temp_dir
-        .path()
-        .join("shelf")
-        .join("dotfiles")
-        .canonicalize()?;
-    let source_file = created_files[0].canonicalize()?;
-    let target_dir = temp_dir
-        .path()
-        .join("shelf")
-        .join("dotfiles")
-        .canonicalize()?;
     index.copy().await?;
 
     let target_dir = temp_dir.path().join("shelf").join("dotfiles");
