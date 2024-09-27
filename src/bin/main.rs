@@ -13,10 +13,8 @@ fn print_completions<G: Generator>(gen: G, cmd: &mut clap::Command) {
     generate(gen, cmd, cmd.get_name().to_string(), &mut io::stdout());
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    let cli = Shelf::parse();
-    let config_dir = directories::BaseDirs::new()
+fn setup_config_dir() -> Result<PathBuf> {
+    let d = directories::BaseDirs::new()
         .map(|base_dirs| base_dirs.config_dir().join("shelf"))
         .or_else(|| {
             std::env::var("XDG_CONFIG_HOME")
@@ -28,9 +26,19 @@ async fn main() -> Result<()> {
             eprintln!("Warning: Could not determine config directory. Using current directory.");
             std::env::current_dir().unwrap().join(".shelf")
         });
+
+    Ok(d)
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let cli = Shelf::parse();
+    let config_dir = setup_config_dir()?;
     let target_directory = config_dir.join("dotfiles");
     let index_file_path = config_dir.join("index.json");
+
     tokio::fs::create_dir_all(&target_directory).await?;
+
     let mut df = Dotfiles::load(config_dir.clone(), target_directory).await?;
 
     match cli.command {

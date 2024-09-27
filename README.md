@@ -34,8 +34,8 @@ shlf ls
 # Remove a dotfile from tracking
 shlf rm .bashrc
 
-# Create symlinks for all tracked dotfiles
-shlf link
+# Create copies for all tracked dotfiles
+shlf cp
 
 # Interactive selection of dotfiles to track
 shlf suggest
