@@ -4,7 +4,6 @@ use tempfile::TempDir;
 use tokio::fs;
 
 use shlf::dotfile::Dotfiles;
-
 async fn setup_test_environment() -> Result<(TempDir, Dotfiles)> {
     let temp_dir = TempDir::new()?;
     let config_dir = temp_dir.path().join("shelf");
@@ -18,7 +17,7 @@ async fn setup_test_environment() -> Result<(TempDir, Dotfiles)> {
     // Set a mock GitHub token for testing
     std::env::set_var("GITHUB_TOKEN", "mock_token_for_testing");
 
-    let index = Dotfiles::new(absolute_target_dir).await?;
+    let index = Dotfiles::new(config_dir.clone(), absolute_target_dir).await?;
     Ok((temp_dir, index))
 }
 

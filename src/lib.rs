@@ -8,14 +8,9 @@ pub mod github;
 pub mod suggestions;
 
 #[derive(Parser)]
-#[command(author, about, long_about = None)]
+#[command(author, about, long_about = None ,version)]
 #[command(arg_required_else_help = true)]
-#[command(disable_version_flag = true)]
 pub struct Shelf {
-    /// Print version information
-    #[arg(short = 'v', long = "version", action = clap::ArgAction::Version)]
-    version: Option<bool>,
-
     #[command(subcommand)]
     pub command: Actions,
 }
