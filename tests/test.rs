@@ -88,7 +88,7 @@ async fn test_add_and_list_dotfile() -> Result<()> {
             .canonicalize()
             .map_err(|e| anyhow::anyhow!("Failed to canonicalize test file: {}", e))?;
         let canonical_dotfile_source = dotfile
-            .get_source()
+            .source()
             .canonicalize()
             .map_err(|e| anyhow::anyhow!("Failed to canonicalize dotfile source: {}", e))?;
 
@@ -99,7 +99,7 @@ async fn test_add_and_list_dotfile() -> Result<()> {
         );
 
         // Verify file content
-        let content = fs::read_to_string(dotfile.get_source())
+        let content = fs::read_to_string(dotfile.source())
             .await
             .map_err(|e| anyhow::anyhow!("Failed to read dotfile content: {}", e))?;
         assert_eq!(
@@ -213,7 +213,7 @@ async fn test_add_multiple_dotfiles_at_once() -> Result<()> {
         let dotfile = dotfiles.iter().find(|(name, _)| name.ends_with(file));
         assert!(dotfile.is_some(), "Dotfile {} should be tracked", file);
         let (_, entry) = dotfile.unwrap();
-        let file_content = fs::read_to_string(entry.get_source()).await?;
+        let file_content = fs::read_to_string(entry.source()).await?;
         assert_eq!(
             file_content, *content,
             "File content should match for {}",
@@ -295,7 +295,7 @@ async fn test_list_returns_correct_info() -> Result<()> {
             name,
             expected_name
         );
-        let canonical_source = dotfile.get_source().canonicalize()?;
+        let canonical_source = dotfile.source().canonicalize()?;
         let canonical_created = created_files[i].canonicalize()?;
         assert_eq!(
             canonical_source, canonical_created,
@@ -304,7 +304,7 @@ async fn test_list_returns_correct_info() -> Result<()> {
         );
 
         // Verify file content
-        let content = fs::read_to_string(dotfile.get_source()).await?;
+        let content = fs::read_to_string(dotfile.source()).await?;
         assert_eq!(
             content, files[i].1,
             "Content mismatch for {}: expected '{}', got '{}'",

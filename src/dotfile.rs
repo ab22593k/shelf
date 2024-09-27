@@ -1,8 +1,14 @@
-//! This module provides functionality for managing dotfiles.
+//! This module provides comprehensive functionality for managing dotfiles.
 //!
-//! It includes structures and methods for handling dotfile entries,
-//! syncing dotfiles, and maintaining an index of dotfiles with their
-//! metadata such as timestamps, file sizes, and hashes.
+//! Key features include:
+//! - Adding and removing dotfiles to/from the collection
+//! - Copying dotfiles to a target directory
+//! - Maintaining an index of dotfiles with metadata (inode, version)
+//! - Handling file conflicts and creating backups
+//! - Serialization and deserialization of the dotfile collection
+//!
+//! The module uses asynchronous operations for improved performance and
+//! provides detailed error handling and user feedback through colored output.
 
 use anyhow::{anyhow, Context, Result};
 use colored::*;
@@ -18,13 +24,15 @@ use crate::github::{RemoteHost, RemoteRepos};
 /// Represents a collection of dotfiles with their metadata and operations.
 ///
 /// This struct is the main container for managing dotfiles. It holds a map of
-/// dotfile entries, the target directory for symlinks, the last update time,
-/// and the version of the dotfile manager.
+/// dotfile entries, the target directory for copying dotfiles, the configuration
+/// directory, and the remote host configuration.
 ///
 /// # Fields
 ///
-/// * `dotfiles` - A HashMap containing DotfileEntry instances, keyed by their names.
-/// * `target_directory` - The directory where symlinks to the dotfiles will be created.
+/// * `dotfiles` - A HashMap containing Index instances, keyed by their names.
+/// * `target_directory` - The directory where copies of the dotfiles will be created.
+/// * `config_dir` - The directory where configuration files are stored.
+/// * `config` - The remote host configuration for version control integration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Dotfiles {
     pub dotfiles: HashMap<String, Index>,
@@ -33,16 +41,16 @@ pub struct Dotfiles {
     pub config: RemoteHost,
 }
 
-/// Represents a single dotfile entry with its source path and index information.
+/// Represents a single dotfile entry with its source path and metadata.
 ///
 /// This struct holds the information for an individual dotfile, including its
-/// source path and metadata stored in the IndexEntry.
+/// source path, inode number, and version.
 ///
 /// # Fields
 ///
 /// * `source` - The source path of the dotfile.
-/// * `inode` - The inode number of the dotfile.
-/// * `version` - The version of the dotfile manager.
+/// * `inode` - The inode number of the dotfile for change detection.
+/// * `version` - The version number of the dotfile entry, incremented on changes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Index {
     pub source: PathBuf,
@@ -51,6 +59,7 @@ pub struct Index {
 }
 
 impl Index {
+    #[must_use]
     pub fn new(source: PathBuf, inode: u64, version: u8) -> Self {
         Self {
             source,
@@ -63,24 +72,30 @@ impl Index {
         self.inode = inode;
     }
 
-    pub fn inc_version(&mut self) {
-        self.version = self.version.wrapping_add(1);
-    }
-
-    pub fn get_source(&self) -> &PathBuf {
+    pub fn source(&self) -> &PathBuf {
         &self.source
     }
 
-    pub fn get_inode(&self) -> u64 {
+    pub fn inode(&self) -> u64 {
         self.inode
     }
 
-    pub fn get_version(&self) -> u8 {
+    pub fn version(&self) -> u8 {
         self.version
     }
 }
 
 impl Dotfiles {
+    /// Loads the Dotfiles collection from a JSON file or creates a new one if it doesn't exist.
+    ///
+    /// # Arguments
+    ///
+    /// * `config_dir` - The directory where the configuration file is stored.
+    /// * `target_directory` - The directory where dotfile copies will be created.
+    ///
+    /// # Returns
+    ///
+    /// A Result containing the Dotfiles instance or an error.
     pub async fn load(config_dir: PathBuf, target_directory: PathBuf) -> Result<Self> {
         let index_path = config_dir.join("index.json");
         if index_path.exists() {
@@ -94,6 +109,16 @@ impl Dotfiles {
         }
     }
 
+    /// Creates a new Dotfiles instance.
+    ///
+    /// # Arguments
+    ///
+    /// * `config_dir` - The directory where the configuration file will be stored.
+    /// * `target_directory` - The directory where dotfile copies will be created.
+    ///
+    /// # Returns
+    ///
+    /// A Result containing the new Dotfiles instance or an error.
     pub async fn new(config_dir: PathBuf, target_directory: PathBuf) -> Result<Self> {
         fs::create_dir_all(&target_directory)
             .await
@@ -107,33 +132,40 @@ impl Dotfiles {
         })
     }
 
+    /// Adds a single dotfile to the collection.
+    ///
+    /// # Arguments
+    ///
+    /// * `file` - The path to the dotfile to be added.
+    ///
+    /// # Returns
+    ///
+    /// A Result indicating success or an error.
     pub async fn add<P: AsRef<Path>>(&mut self, file: P) -> Result<()> {
         let source = file.as_ref().to_path_buf();
         let name = source
             .file_name()
             .and_then(|os_str| os_str.to_str())
-            .ok_or_else(|| anyhow::anyhow!("{} Invalid file name", "Error:".red().bold()))?
+            .ok_or_else(|| anyhow!("{} Invalid file name", "Error:".red().bold()))?
             .to_string();
 
         if !source.exists() {
-            return Err(anyhow::anyhow!(
+            return Err(anyhow!(
                 "{} Source file does not exist: {}",
                 "Error:".red().bold(),
                 source.display().to_string().cyan()
             ));
         }
-        let source = fs::canonicalize(&source).await.context(format!(
-            "{} Failed to canonicalize source path: {}",
-            "Error:".red().bold(),
-            source.display().to_string().cyan()
-        ))?;
+        let source = fs::canonicalize(&source).await.with_context(|| {
+            format!(
+                "{} Failed to canonicalize source path: {}",
+                "Error:".red().bold(),
+                source.display().to_string().cyan()
+            )
+        })?;
 
         let metadata = fs::metadata(&source).await?;
-        let index = Index {
-            source: source.clone(),
-            inode: metadata.ino(),
-            version: 1,
-        };
+        let index = Index::new(source, metadata.ino(), 1);
 
         self.dotfiles.insert(name.clone(), index);
         println!(
@@ -147,60 +179,20 @@ impl Dotfiles {
         Ok(())
     }
 
-    /// Adds multiple dotfiles to the collection.
-    ///
-    /// This method takes an iterator of paths and attempts to add each one as a dotfile.
-    /// It returns a vector of results, one for each file attempted to be added.
+    /// Removes multiple dotfiles from the collection.
     ///
     /// # Arguments
     ///
-    /// * `sources` - An iterator of path-like objects representing the dotfiles to be added.
+    /// * `fnames` - A slice of dotfile names to be removed.
     ///
     /// # Returns
     ///
-    /// * `Vec<Result<(), anyhow::Error>>` - A vector of results, one for each file.
-    // pub async fn add_multi<P, I>(&mut self, sources: I) -> Vec<Result<(), anyhow::Error>>
-    // where
-    //     P: AsRef<Path>,
-    //     I: IntoIterator<Item = P>,
-    // {
-    //     println!("{}", "Adding multiple dotfiles...".blue().bold());
-    //     let mut results = Vec::new();
-    //     for source in sources {
-    //         let result = self.add(source).await;
-    //         if let Err(ref e) = result {
-    //             println!("{} {}", "Failed to add dotfile:".red().bold(), e);
-    //         }
-    //         results.push(result);
-    //     }
-    //     println!("{}", "Finished adding dotfiles".green().bold());
-    //     self.save(&self.config_dir).await?;
-    //     results
-    // }
-
-    /// Removes a dotfile from the collection.
-    ///
-    /// This method removes a dotfile from the Dotfiles collection and deletes its symlink
-    /// if it exists in the target directory. It performs the following steps:
-    /// 1. Removes the dotfile entry from the dotfiles HashMap.
-    /// 2. Attempts to remove the symlink from the target directory if it exists.
-    /// 3. Updates the last_update timestamp.
-    ///
-    /// # Arguments
-    ///
-    /// * `name` - The name of the dotfile to be removed.
-    ///
-    /// # Returns
-    ///
-    /// * `Vec<Result<()>>` - A vector of results, one for each dotfile attempted to be removed.
+    /// A vector of Results, one for each dotfile removal attempt.
     pub fn remove_multi(&mut self, fnames: &[&str]) -> Vec<Result<()>> {
-        let mut results = Vec::new();
-        for fname in fnames {
-            let result = self.remove_single(fname);
-            results.push(result);
-        }
-
-        results
+        fnames
+            .iter()
+            .map(|&fname| self.remove_single(fname))
+            .collect()
     }
 
     fn remove_single(&mut self, name: &str) -> Result<()> {
@@ -214,11 +206,13 @@ impl Dotfiles {
 
         let target = self.target_directory.join(name);
         if target.exists() {
-            std::fs::remove_file(&target).context(format!(
-                "{} Failed to remove file for dotfile: {}",
-                "Error:".red().bold(),
-                name.cyan()
-            ))?;
+            std::fs::remove_file(&target).with_context(|| {
+                format!(
+                    "{} Failed to remove file for dotfile: {}",
+                    "Error:".red().bold(),
+                    name.cyan()
+                )
+            })?;
             println!(
                 "{} Removed dotfile: {}",
                 "Success:".green().bold(),
@@ -258,6 +252,11 @@ impl Dotfiles {
         );
     }
 
+    /// Copies all dotfiles to the target directory.
+    ///
+    /// # Returns
+    ///
+    /// A Result indicating success or an error.
     pub async fn copy(&self) -> Result<()> {
         println!(
             "{}",
@@ -390,7 +389,16 @@ impl Dotfiles {
         results
     }
 
-    pub async fn save(&self, index_path: &PathBuf) -> Result<()> {
+    /// Saves the current state of the Dotfiles collection to a JSON file.
+    ///
+    /// # Arguments
+    ///
+    /// * `index_path` - The path where the JSON file should be saved.
+    ///
+    /// # Returns
+    ///
+    /// A Result indicating success or an error.
+    pub async fn save(&self, index_path: &Path) -> Result<()> {
         // Ensure the directory exists
         if let Some(parent) = index_path.parent() {
             tokio::fs::create_dir_all(parent).await?;
