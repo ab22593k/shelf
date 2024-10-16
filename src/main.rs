@@ -1,11 +1,15 @@
-use std::path::PathBuf;
+#![allow(clippy::nonminimal_bool)]
 
-use clap::{arg, command, Parser, Subcommand};
-use clap_complete::Shell;
+mod dotfile;
+mod suggestions;
 
-pub mod dotfile;
-pub mod github;
-pub mod suggestions;
+use anyhow::{anyhow, Result};
+use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::{generate, Generator, Shell};
+use dotfile::Dotfiles;
+use suggestions::Suggestions;
+
+use std::{io, path::PathBuf};
 
 #[derive(Parser)]
 #[command(author, about, long_about = None ,version)]
@@ -51,19 +55,6 @@ pub enum Actions {
     #[command(name = "cp", about = "Create symlinks for all tracked dotfiles")]
     Copy,
 
-    /// Repository operations for syncing dotfiles
-    #[command(about = "Repository operations for syncing dotfiles")]
-    Repo {
-        #[arg(required = true)]
-        path: PathBuf,
-
-        #[arg(long, conflicts_with = "pull")]
-        push: bool,
-
-        #[arg(long, conflicts_with = "push")]
-        pull: bool,
-    },
-
     /// Suggest commonly used configuration files
     /// This command provides a list of popular dotfiles and configuration
     /// files commonly used across Linux and macOS systems.
@@ -81,4 +72,64 @@ pub enum Actions {
         #[arg(value_enum)]
         shell: Shell,
     },
+}
+
+fn print_completions<G: Generator>(gen: G, cmd: &mut clap::Command) {
+    generate(gen, cmd, cmd.get_name().to_string(), &mut io::stdout());
+}
+
+fn setup_config_dir() -> Result<PathBuf> {
+    let d = directories::BaseDirs::new()
+        .map(|base_dirs| base_dirs.config_dir().join("shelf"))
+        .or_else(|| {
+            std::env::var("XDG_CONFIG_HOME")
+                .ok()
+                .map(|x| PathBuf::from(x).join("shelf"))
+        })
+        .or_else(|| home::home_dir().map(|x| x.join(".config").join("shelf")))
+        .unwrap_or_else(|| {
+            eprintln!("Warning: Could not determine config directory. Using current directory.");
+            std::env::current_dir().unwrap().join(".shelf")
+        });
+
+    Ok(d)
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let cli = Shelf::parse();
+    let config_dir = setup_config_dir()?;
+    let target_directory = config_dir.join("dotfiles");
+    let index_file_path = config_dir.join("index.json");
+
+    tokio::fs::create_dir_all(&target_directory).await?;
+
+    let mut df = Dotfiles::load(config_dir.clone(), target_directory).await?;
+
+    match cli.command {
+        Actions::Add { paths } => {
+            df.add_multi(paths).await;
+        }
+        Actions::List => df.print_list(),
+        Actions::Remove { path } => {
+            let results = df.remove_multi(&[path.to_str().unwrap()]);
+            if results.iter().any(|r| r.is_err()) {
+                return Err(anyhow!("Failed to remove one or more dotfiles"));
+            }
+        }
+        Actions::Copy => {
+            df.copy().await?;
+        }
+        Actions::Suggest { interactive } => {
+            Suggestions::default().render(&mut df, interactive).await?
+        }
+        Actions::Completion { shell } => {
+            let mut cmd = Shelf::command();
+            print_completions(shell, &mut cmd);
+            return Ok(());
+        }
+    }
+
+    df.save(&index_file_path).await?;
+    Ok(())
 }
