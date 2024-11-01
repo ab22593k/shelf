@@ -1,5 +1,3 @@
-#![allow(clippy::nonminimal_bool)]
-
 mod config;
 mod dotconf;
 
@@ -61,7 +59,8 @@ pub enum Actions {
 }
 
 fn print_completions<G: Generator>(gen: G, cmd: &mut clap::Command) {
-    generate(gen, cmd, cmd.get_name().to_string(), &mut io::stdout());
+    let bin_name = cmd.get_bin_name().unwrap_or("slf").to_string();
+    generate::<G, _>(gen, cmd, bin_name, &mut io::stdout());
 }
 
 async fn init_db(conn: &Connection) -> Result<()> {
@@ -245,6 +244,7 @@ async fn main() -> Result<()> {
         Actions::Completion { shell } => {
             let mut cmd = Shelf::command();
             print_completions(shell, &mut cmd);
+
             return Ok(());
         }
     }

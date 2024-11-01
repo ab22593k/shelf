@@ -1,36 +1,29 @@
-//! This module provides functionality for managing and suggesting common dotfiles.
-//! It includes methods for listing, displaying, and interactively selecting dotfiles.
+//! Manages and suggests common configuration files (dotconf).
+//! Provides listing and interactive selection functionality.
 
 use anyhow::Result;
 
-/// Represents a collection of dotfile suggestions organized by categories.
+/// Collection of dotconf suggestions organized by categories.
 ///
-/// This struct contains a list of `Category` instances, each representing a group
-/// of related dotfiles. It provides methods for retrieving, displaying, and
-/// interactively selecting dotfiles across various categories.
+/// Contains categorized configuration file suggestions and methods for
+/// displaying and selecting them interactively.
 pub struct Suggestions {
     categories: Vec<Category>,
 }
 
-/// Represents a category of dotfiles, containing a name and a list of file paths.
+/// Category of configuration files with name and file paths.
 ///
-/// Each `Category` instance groups related dotfiles under a common name,
-/// making it easier to organize and present suggestions to users.
+/// Groups related configuration files for easier organization.
 struct Category {
     name: &'static str,
     files: Vec<&'static str>,
 }
 
 impl Default for Suggestions {
-    /// Creates a new `Suggestions` instance with predefined categories and dotfiles.
+    /// Creates new Suggestions with predefined categories.
     ///
-    /// This method initializes the `Suggestions` struct with a set of common dotfile
-    /// categories and their associated files. The categories include Shell, Git, Vim,
-    /// Emacs, Tmux, SSH, X11, macOS, IDE, and Window Managers.
-    ///
-    /// # Returns
-    ///
-    /// A new `Suggestions` instance containing predefined categories and dotfiles.
+    /// Initializes with common configuration files across categories like
+    /// Shell, VCS, Editors, etc.
     fn default() -> Self {
         Self {
             categories: vec![
@@ -170,31 +163,14 @@ impl Default for Suggestions {
 }
 
 impl Suggestions {
-    /// Prints all suggested dotfiles grouped by category.
-    ///
-    /// This method displays a formatted list of all dotfile suggestions,
-    /// organized by their respective categories. Each category name is
-    /// printed as a header, followed by the list of associated file paths.
-    ///
-    /// # Example output:
-    ///
-    /// ```text
-    /// Suggested dotfiles to track:
-    ///
-    /// Shell:
-    ///   ~/.bashrc
-    ///   ~/.zshrc
-    ///   ...
-    ///
-    /// Git:
-    ///   ~/.gitconfig
-    ///   ~/.gitignore_global
-    ///   ...
-    /// ```
+    /// Prints configuration files by category.
     pub fn print_suggestions(&self) {
         use colored::*;
 
-        println!("{}", "Suggested dotfiles to track:".bold().underline());
+        println!(
+            "{}",
+            "Suggested configuration files to track:".bold().underline()
+        );
         for category in &self.categories {
             println!("\n{}:", category.name.green().bold());
             for file in &category.files {
@@ -203,23 +179,9 @@ impl Suggestions {
         }
     }
 
-    /// Provides an interactive interface for users to select dotfiles.
+    /// Interactive multi-select interface for choosing configuration files.
     ///
-    /// This method uses the `dialoguer` crate to create a multi-select interface
-    /// allowing users to choose categories and then specific files within those
-    /// categories. It presents a two-step selection process:
-    /// 1. Select categories of interest
-    /// 2. For each selected category, choose specific files
-    ///
-    /// # Returns
-    ///
-    /// A `Result` containing a `Vec<String>` of selected file paths on success,
-    /// or a boxed error on failure.
-    ///
-    /// # Errors
-    ///
-    /// This method may return an error if there are issues with the user interface
-    /// or if the selection process is interrupted.
+    /// Returns selected file paths or error if selection fails.
     pub fn interactive_selection(&self) -> Result<Vec<String>, Box<dyn std::error::Error>> {
         use dialoguer::MultiSelect;
 

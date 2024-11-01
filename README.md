@@ -48,25 +48,26 @@ Shelf supports generating shell completion scripts for various shells. You can g
 
 ```bash
 # Generate completion script for Bash
-slf completion bash > shelf.bash
+slf completion bash > slf.bash
 
 # Generate completion script for Zsh
-slf completion zsh > _shelf
+slf completion zsh > _slf
 
 # Generate completion script for Fish
-slf completion fish > shelf.fish
+slf completion fish > slf.fish
 ```
 
 To use the completion scripts:
 
 - For Bash, add the following line to your `~/.bashrc`:
+
   ```bash
-  source /path/to/shelf.bash
+  source /path/to/slf.bash
   ```
 
-- For Zsh, place the `_shlf` file in `~/.zfunc`, then add `source ~/.zfunc/*` in `~/.zshrc`.
+- For Zsh, place the `_slf` file in `~/.zfunc`, then add `source ~/.zfunc/_slf` in `~/.zshrc`.
 
-- For Fish, place the `shlf.fish` file in `~/.config/fish/completions`.
+- For Fish, place the `slf.fish` file in `~/.config/fish/completions`.
 
 After setting up the completion script, restart your shell or source the respective configuration file to enable completions for the `slf` command.
 
