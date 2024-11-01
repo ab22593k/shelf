@@ -33,10 +33,10 @@ pub enum Actions {
     List,
 
     #[command(name = "rm", about = "Remove dotconf[s] from management")]
-    Remove { path: PathBuf },
+    Remove { paths: Vec<PathBuf> },
 
     #[command(name = "cp", about = "Create a dotconf[s] copy")]
-    Copy { path: PathBuf },
+    Copy { paths: Vec<PathBuf> },
 
     #[command(about = "Suggest commonly used dotconf[s] cross diffrent OS's")]
     Suggest {
@@ -133,35 +133,39 @@ async fn main() -> Result<()> {
                 println!("{}", "=================".bright_black());
             }
         }
-        Actions::Remove { path } => {
+        Actions::Remove { paths } => {
             let conn = Connection::open(&db_path)?;
-            // Get the dotconf info before deletion for display
-            if let Ok(dotconf) = Dotconf::select_from(&conn, &path).await {
-                Dotconf::delete_from(&conn, &path).await?;
-                println!(
-                    "{} {}",
-                    "Removed:".green().bold(),
-                    dotconf.get_path().display()
-                );
-            } else {
-                println!(
-                    "{} No such dotconf found: {:?}",
-                    "Error:".red().bold(),
-                    path
-                );
+            for path in paths {
+                // Get the dotconf info before deletion for display
+                if let Ok(dotconf) = Dotconf::select_from(&conn, &path).await {
+                    Dotconf::delete_from(&conn, &path).await?;
+                    println!(
+                        "{} {}",
+                        "Removed:".green().bold(),
+                        dotconf.get_path().display()
+                    );
+                } else {
+                    println!(
+                        "{} No such dotconf found: {:?}",
+                        "Error:".red().bold(),
+                        path
+                    );
+                }
             }
         }
-        Actions::Copy { path } => {
+        Actions::Copy { paths } => {
             let conn = Connection::open(&db_path)?;
 
-            // Try to create new dotconf from file
-            match Dotconf::from_file(&path).await {
-                Ok(mut dotconf) => {
-                    dotconf.insert_into(&conn).await?;
-                    println!("{} {:?}", "Successfully copied".green().bold(), path);
-                }
-                Err(e) => {
-                    println!("{} {:?}: {}", "Failed to copy".red().bold(), path, e);
+            for path in paths {
+                // Try to create new dotconf from file
+                match Dotconf::from_file(&path).await {
+                    Ok(mut dotconf) => {
+                        dotconf.insert_into(&conn).await?;
+                        println!("{} {:?}", "Successfully copied".green().bold(), path);
+                    }
+                    Err(e) => {
+                        println!("{} {:?}: {}", "Failed to copy".red().bold(), path, e);
+                    }
                 }
             }
         }

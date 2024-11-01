@@ -1,6 +1,6 @@
 pub mod suggest;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 
 use std::{
     path::{Path, PathBuf},
@@ -31,14 +31,14 @@ impl Dotconf {
         let path = path.as_ref();
         let content = tokio::fs::read_to_string(path)
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to read file {}: {}", path.display(), e))?;
+            .map_err(|e| anyhow!("Failed to read file {}: {}", path.display(), e))?;
 
-        let metadata = tokio::fs::metadata(path).await.map_err(|e| {
-            anyhow::anyhow!("Failed to read metadata for {}: {}", path.display(), e)
-        })?;
+        let metadata = tokio::fs::metadata(path)
+            .await
+            .map_err(|e| anyhow!("Failed to read metadata for {}: {}", path.display(), e))?;
 
         let last_modified = metadata.modified().map_err(|e| {
-            anyhow::anyhow!(
+            anyhow!(
                 "Failed to get modification time for {}: {}",
                 path.display(),
                 e
@@ -238,6 +238,45 @@ mod tests {
             time_diff < 1,
             "Timestamp should be preserved within 1 second accuracy"
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_multiple_operations() -> Result<()> {
+        let conn = setup_db().await?;
+        let test_time = SystemTime::UNIX_EPOCH + Duration::from_secs(1630000000);
+
+        // Insert multiple test entries
+        let paths = ["test/path1", "test/path2", "test/path3"];
+        for path in paths.iter() {
+            let mut conf = Dotconf::new(
+                PathBuf::from(path),
+                format!("content for {}", path),
+                test_time,
+            );
+            conf.insert_into(&conn).await?;
+        }
+
+        // Verify all entries were inserted
+        for path in paths.iter() {
+            let conf = Dotconf::select_from(&conn, path).await?;
+            assert_eq!(conf.content, format!("content for {}", path));
+        }
+
+        // Delete multiple entries
+        for path in &paths[0..2] {
+            Dotconf::delete_from(&conn, path).await?;
+        }
+
+        // Verify deleted entries are gone
+        for path in &paths[0..2] {
+            assert!(Dotconf::select_from(&conn, path).await.is_err());
+        }
+
+        // Verify remaining entry still exists
+        let remaining = Dotconf::select_from(&conn, &paths[2]).await?;
+        assert_eq!(remaining.content, format!("content for {}", paths[2]));
 
         Ok(())
     }
