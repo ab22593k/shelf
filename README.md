@@ -1,15 +1,14 @@
-# Shelf - Dotfile Manager
+# Shelf - Dotconf Manager
 
 [![Shelf CI](https://github.com/ab22593k/shelf/actions/workflows/ci.yml/badge.svg)](https://github.com/ab22593k/shelf/actions/workflows/ci.yml)
 
-Shelf is a command-line tool for managing and syncing dotfiles across different machines. It allows you to track, list, remove, and sync your dotfiles with ease.
+Shelf is a command-line tool for managing dotconf files. It allows you to track, list, remove files with ease.
 
 ## Features
 
-- Track dotfiles from anywhere in your file system
+- Track dotconf files from anywhere in your file system
 - List all tracked dotfiles
-- Remove dotfiles from tracking
-- Sync dotfiles to a specified directory or default location
+- Remove dotconf files from tracking
 
 ## Installation
 
@@ -26,31 +25,22 @@ Shelf provides several commands to manage your dotfiles:
 
 ```bash
 # Add a new dotfile to track
-shlf add ~/.bashrc
+slf cp ~/.bashrc
 
 # List all tracked dotfiles
-shlf ls
+slf ls
 
 # Remove a dotfile from tracking
-shlf rm .bashrc
-
-# Create copies for all tracked dotfiles
-shlf cp
+slf rm ~/.bashrc
 
 # Interactive selection of dotfiles to track
-shlf suggest
+slf suggest -i
 
 # Show help
-shlf --help
+slf --help
 ```
 
 Each command can be run with `-h` or `--help` for more information.
-
-# Push dotfiles to a remote Git repository
-shlf push --repo username/dotfiles --token your_access_token --branch main
-
-# Pull dotfiles from a remote Git repository
-shlf pull
 
 ## Shell Completion
 
@@ -58,27 +48,27 @@ Shelf supports generating shell completion scripts for various shells. You can g
 
 ```bash
 # Generate completion script for Bash
-shlf completion bash > shlf.bash
+slf completion bash > shelf.bash
 
 # Generate completion script for Zsh
-shlf completion zsh > _shlf
+slf completion zsh > _shelf
 
 # Generate completion script for Fish
-shlf completion fish > shlf.fish
+slf completion fish > shelf.fish
 ```
 
 To use the completion scripts:
 
 - For Bash, add the following line to your `~/.bashrc`:
   ```bash
-  source /path/to/shlf.bash
+  source /path/to/shelf.bash
   ```
 
-- For Zsh, place the `_shlf` file in `~/.zfunc`, don't forget to add `source ~/.zfunc/*` in `~/.zshrc`.
+- For Zsh, place the `_shlf` file in `~/.zfunc`, then add `source ~/.zfunc/*` in `~/.zshrc`.
 
 - For Fish, place the `shlf.fish` file in `~/.config/fish/completions`.
 
-After setting up the completion script, restart your shell or source the respective configuration file to enable completions for the `shlf` command.
+After setting up the completion script, restart your shell or source the respective configuration file to enable completions for the `slf` command.
 
 ## Development
 
@@ -99,7 +89,7 @@ To run the project directly without installing:
 cargo run -- [SUBCOMMAND]
 ```
 
-Replace `[SUBCOMMAND]` with the command you want to run, such as `add`, `ls`, `rm`, or `link`.
+Replace `[SUBCOMMAND]` with the command you want to run, such as `cp`, `ls`, or `rm`.
 
 ## Contributing
 

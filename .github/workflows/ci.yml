@@ -20,11 +20,27 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v3
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+
+      - uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
       - name: Build
         run: cargo build --verbose
       - name: Run tests
         run: cargo test --verbose
 
+    needs: [build]
   clippy:
     strategy:
       matrix:
@@ -47,7 +63,8 @@ jobs:
 
   publish:
     name: Publish
-    if: startsWith(github.ref, 'refs/tags/')
+    needs: [build, clippy, fmt]
+    if: github.event_name == 'release' && github.event.action == 'created'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
@@ -57,13 +74,12 @@ jobs:
           profile: minimal
           toolchain: stable
           override: true
-      - name: Verify package
-        if: startsWith(github.ref, 'refs/tags/')
-        run: cargo package --allow-dirty
-      - name: Publish to crates.io
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Verify and publish package
         env:
-          REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
-          cargo publish --token "$REGISTRY_TOKEN" || { echo "Publish failed"; exit   1; }
-          echo "Successfully published to crates.io"
+          cargo package
+          cargo publish || {
+            echo "::error::Failed to publish package"
+            exit 1
+          }
