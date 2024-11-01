@@ -6,9 +6,9 @@ Shelf is a command-line tool for managing dotconf files. It allows you to track,
 
 ## Features
 
-- Track dotconf files from anywhere in your file system
-- List all tracked dotfiles
-- Remove dotconf files from tracking
+- Track dotconf files from anywhere in your file system recursively.
+- List all tracked dotfiles.
+- Remove dotconf files recursively from database.
 
 ## Installation
 

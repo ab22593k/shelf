@@ -14,6 +14,7 @@ use rusqlite::Connection;
 
 use std::time::SystemTime;
 use std::{io, path::PathBuf};
+use walkdir::WalkDir;
 
 // Version and crate information
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -33,10 +34,18 @@ pub enum Actions {
     List,
 
     #[command(name = "rm", about = "Remove dotconf[s] from management")]
-    Remove { paths: Vec<PathBuf> },
+    Remove {
+        #[arg(short, long)]
+        recursive: bool,
+        paths: Vec<PathBuf>,
+    },
 
     #[command(name = "cp", about = "Create a dotconf[s] copy")]
-    Copy { paths: Vec<PathBuf> },
+    Copy {
+        #[arg(short, long)]
+        recursive: bool,
+        paths: Vec<PathBuf>,
+    },
 
     #[command(about = "Suggest commonly used dotconf[s] cross diffrent OS's")]
     Suggest {
@@ -133,12 +142,29 @@ async fn main() -> Result<()> {
                 println!("{}", "=================".bright_black());
             }
         }
-        Actions::Remove { paths } => {
+        Actions::Remove { recursive, paths } => {
             let conn = Connection::open(&db_path)?;
-            for path in paths {
-                // Get the dotconf info before deletion for display
-                if let Ok(dotconf) = Dotconf::select_from(&conn, &path).await {
-                    Dotconf::delete_from(&conn, &path).await?;
+            for base_path in paths {
+                if recursive && base_path.is_dir() {
+                    for entry in WalkDir::new(&base_path)
+                        .follow_links(true)
+                        .into_iter()
+                        .filter_map(|e| e.ok())
+                    {
+                        let path = entry.path();
+                        if path.is_file() {
+                            if let Ok(dotconf) = Dotconf::select(&conn, path).await {
+                                Dotconf::remove(&conn, path).await?;
+                                println!(
+                                    "{} {}",
+                                    "Removed:".green().bold(),
+                                    dotconf.get_path().display()
+                                );
+                            }
+                        }
+                    }
+                } else if let Ok(dotconf) = Dotconf::select(&conn, &base_path).await {
+                    Dotconf::remove(&conn, &base_path).await?;
                     println!(
                         "{} {}",
                         "Removed:".green().bold(),
@@ -148,23 +174,43 @@ async fn main() -> Result<()> {
                     println!(
                         "{} No such dotconf found: {:?}",
                         "Error:".red().bold(),
-                        path
+                        base_path
                     );
                 }
             }
         }
-        Actions::Copy { paths } => {
+        Actions::Copy { recursive, paths } => {
             let conn = Connection::open(&db_path)?;
 
-            for path in paths {
-                // Try to create new dotconf from file
-                match Dotconf::from_file(&path).await {
-                    Ok(mut dotconf) => {
-                        dotconf.insert_into(&conn).await?;
-                        println!("{} {:?}", "Successfully copied".green().bold(), path);
+            for base_path in paths {
+                if recursive && base_path.is_dir() {
+                    for entry in WalkDir::new(&base_path)
+                        .follow_links(true)
+                        .into_iter()
+                        .filter_map(|e| e.ok())
+                    {
+                        let path = entry.path();
+                        if path.is_file() {
+                            match Dotconf::from_file(path).await {
+                                Ok(mut dotconf) => {
+                                    dotconf.insert(&conn).await?;
+                                    println!("{} {:?}", "Successfully copied".green().bold(), path);
+                                }
+                                Err(e) => {
+                                    println!("{} {:?}: {}", "Failed to copy".red().bold(), path, e);
+                                }
+                            }
+                        }
                     }
-                    Err(e) => {
-                        println!("{} {:?}: {}", "Failed to copy".red().bold(), path, e);
+                } else {
+                    match Dotconf::from_file(&base_path).await {
+                        Ok(mut dotconf) => {
+                            dotconf.insert(&conn).await?;
+                            println!("{} {:?}", "Successfully copied".green().bold(), base_path);
+                        }
+                        Err(e) => {
+                            println!("{} {:?}: {}", "Failed to copy".red().bold(), base_path, e);
+                        }
                     }
                 }
             }
@@ -180,7 +226,7 @@ async fn main() -> Result<()> {
                             let expanded_path = shellexpand::tilde(&path).to_string();
                             match Dotconf::from_file(expanded_path).await {
                                 Ok(mut dotconf) => {
-                                    if let Err(e) = dotconf.insert_into(&conn).await {
+                                    if let Err(e) = dotconf.insert(&conn).await {
                                         println!("{} {}: {}", "Failed".red().bold(), path, e);
                                     } else {
                                         println!("{} {}", "Added".green().bold(), path);

@@ -48,7 +48,7 @@ impl Dotconf {
         Ok(Self::new(path.to_path_buf(), content, last_modified))
     }
 
-    pub async fn select_from(conn: &rusqlite::Connection, path: impl AsRef<Path>) -> Result<Self> {
+    pub async fn select(conn: &rusqlite::Connection, path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
 
         let mut stmt =
@@ -65,7 +65,7 @@ impl Dotconf {
         Ok(Self::new(path.to_path_buf(), content, last_modified))
     }
 
-    pub async fn insert_into(&mut self, conn: &rusqlite::Connection) -> Result<()> {
+    pub async fn insert(&mut self, conn: &rusqlite::Connection) -> Result<()> {
         let unix_timestamp = self
             .last_modified
             .duration_since(SystemTime::UNIX_EPOCH)?
@@ -83,7 +83,7 @@ impl Dotconf {
         Ok(())
     }
 
-    pub async fn delete_from(conn: &rusqlite::Connection, path: impl AsRef<Path>) -> Result<()> {
+    pub async fn remove(conn: &rusqlite::Connection, path: impl AsRef<Path>) -> Result<()> {
         let path = path.as_ref();
         conn.execute(
             "DELETE FROM dotconf WHERE path = ?1",
@@ -151,14 +151,14 @@ mod tests {
             ["test/path", "test content", &1630000000.to_string()],
         )?;
 
-        let result = Dotconf::select_from(&conn, "test/path").await?;
+        let result = Dotconf::select(&conn, "test/path").await?;
 
         assert_eq!(result.path.to_string_lossy(), "test/path");
         assert_eq!(result.content, "test content");
         assert_eq!(result.last_modified, test_time);
 
         // Test non-existent path
-        assert!(Dotconf::select_from(&conn, "nonexistent").await.is_err());
+        assert!(Dotconf::select(&conn, "nonexistent").await.is_err());
 
         Ok(())
     }
@@ -175,18 +175,18 @@ mod tests {
         );
 
         // Test initial insert
-        conf.insert_into(&conn).await?;
+        conf.insert(&conn).await?;
 
         // Verify insert
-        let saved = Dotconf::select_from(&conn, "test/path").await?;
+        let saved = Dotconf::select(&conn, "test/path").await?;
         assert_eq!(saved.content, "initial content");
 
         // Test update
         conf.content = "updated content".to_string();
-        conf.insert_into(&conn).await?;
+        conf.insert(&conn).await?;
 
         // Verify update
-        let updated = Dotconf::select_from(&conn, "test/path").await?;
+        let updated = Dotconf::select(&conn, "test/path").await?;
         assert_eq!(updated.content, "updated content");
 
         Ok(())
@@ -203,16 +203,16 @@ mod tests {
         )?;
 
         // Verify insertion
-        assert!(Dotconf::select_from(&conn, "test/path").await.is_ok());
+        assert!(Dotconf::select(&conn, "test/path").await.is_ok());
 
         // Test deletion
-        Dotconf::delete_from(&conn, "test/path").await?;
+        Dotconf::remove(&conn, "test/path").await?;
 
         // Verify deletion
-        assert!(Dotconf::select_from(&conn, "test/path").await.is_err());
+        assert!(Dotconf::select(&conn, "test/path").await.is_err());
 
         // Test deleting non-existent entry (should not error)
-        assert!(Dotconf::delete_from(&conn, "nonexistent").await.is_ok());
+        assert!(Dotconf::remove(&conn, "nonexistent").await.is_ok());
 
         Ok(())
     }
@@ -224,9 +224,9 @@ mod tests {
 
         let mut conf = Dotconf::new(PathBuf::from("test/path"), "content".to_string(), test_time);
 
-        conf.insert_into(&conn).await?;
+        conf.insert(&conn).await?;
 
-        let loaded = Dotconf::select_from(&conn, "test/path").await?;
+        let loaded = Dotconf::select(&conn, "test/path").await?;
 
         let time_diff = loaded
             .last_modified
@@ -255,28 +255,73 @@ mod tests {
                 format!("content for {}", path),
                 test_time,
             );
-            conf.insert_into(&conn).await?;
+            conf.insert(&conn).await?;
         }
 
         // Verify all entries were inserted
         for path in paths.iter() {
-            let conf = Dotconf::select_from(&conn, path).await?;
+            let conf = Dotconf::select(&conn, path).await?;
             assert_eq!(conf.content, format!("content for {}", path));
         }
 
         // Delete multiple entries
         for path in &paths[0..2] {
-            Dotconf::delete_from(&conn, path).await?;
+            Dotconf::remove(&conn, path).await?;
         }
 
         // Verify deleted entries are gone
         for path in &paths[0..2] {
-            assert!(Dotconf::select_from(&conn, path).await.is_err());
+            assert!(Dotconf::select(&conn, path).await.is_err());
         }
 
         // Verify remaining entry still exists
-        let remaining = Dotconf::select_from(&conn, &paths[2]).await?;
+        let remaining = Dotconf::select(&conn, &paths[2]).await?;
         assert_eq!(remaining.content, format!("content for {}", paths[2]));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_directory_operations() -> Result<()> {
+        let conn = setup_db().await?;
+        let test_time = SystemTime::UNIX_EPOCH + Duration::from_secs(1630000000);
+
+        // Create test entries simulating files in directories
+        let dir_paths = [
+            "test/dir1/file1",
+            "test/dir1/file2",
+            "test/dir1/subdir/file3",
+            "test/dir2/file1",
+        ];
+
+        for path in dir_paths.iter() {
+            let mut conf = Dotconf::new(
+                PathBuf::from(path),
+                format!("content for {}", path),
+                test_time,
+            );
+            conf.insert(&conn).await?;
+        }
+
+        // Verify all entries exist
+        for path in dir_paths.iter() {
+            let conf = Dotconf::select(&conn, path).await?;
+            assert_eq!(conf.content, format!("content for {}", path));
+        }
+
+        // Delete entire directory
+        for entry in dir_paths.iter().filter(|p| p.starts_with("test/dir1")) {
+            Dotconf::remove(&conn, entry).await?;
+        }
+
+        // Verify dir1 entries are deleted
+        for entry in dir_paths.iter().filter(|p| p.starts_with("test/dir1")) {
+            assert!(Dotconf::select(&conn, entry).await.is_err());
+        }
+
+        // Verify dir2 entry still exists
+        let remaining = Dotconf::select(&conn, "test/dir2/file1").await?;
+        assert_eq!(remaining.content, "content for test/dir2/file1");
 
         Ok(())
     }
