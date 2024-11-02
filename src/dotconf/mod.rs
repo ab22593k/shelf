@@ -1,6 +1,7 @@
 pub mod suggest;
 
 use anyhow::{anyhow, Result};
+use rusqlite::Connection;
 
 use std::{
     path::{Path, PathBuf},
@@ -48,7 +49,7 @@ impl Dotconf {
         Ok(Self::new(path.to_path_buf(), content, last_modified))
     }
 
-    pub async fn select(conn: &rusqlite::Connection, path: impl AsRef<Path>) -> Result<Self> {
+    pub async fn select(conn: &Connection, path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
 
         let mut stmt =
@@ -65,7 +66,7 @@ impl Dotconf {
         Ok(Self::new(path.to_path_buf(), content, last_modified))
     }
 
-    pub async fn insert(&mut self, conn: &rusqlite::Connection) -> Result<()> {
+    pub async fn insert(&mut self, conn: &Connection) -> Result<()> {
         let unix_timestamp = self
             .last_modified
             .duration_since(SystemTime::UNIX_EPOCH)?
@@ -83,12 +84,62 @@ impl Dotconf {
         Ok(())
     }
 
-    pub async fn remove(conn: &rusqlite::Connection, path: impl AsRef<Path>) -> Result<()> {
+    pub async fn remove(conn: &Connection, path: impl AsRef<Path>) -> Result<()> {
         let path = path.as_ref();
         conn.execute(
             "DELETE FROM dotconf WHERE path = ?1",
             [path.to_string_lossy().to_string()],
         )?;
+        Ok(())
+    }
+
+    /// Restores the file on disk using content from the database.
+    ///
+    /// This method will:
+    /// 1. Query the content from the database for this file's path
+    /// 2. Write that content back to the file on disk
+    /// 3. Update internal state with new content and modification time
+    ///
+    /// # Returns
+    /// - `Ok(())` if the backload was successful
+    /// - `Err` if database query fails or file operations fail
+    ///
+    /// # Errors
+    /// - If the database query fails
+    /// - If writing to the file fails
+    /// - If reading file metadata fails
+    pub async fn backload(&mut self, conn: &Connection) -> Result<()> {
+        let mut stmt = conn.prepare("SELECT content FROM dotconf WHERE path = ?1")?;
+
+        let content: String = stmt
+            .query_row([self.path.to_string_lossy().to_string()], |row| row.get(0))
+            .map_err(|e| {
+                anyhow!(
+                    "Failed to read content from database for {}: {}",
+                    self.path.display(),
+                    e
+                )
+            })?;
+
+        tokio::fs::write(&self.path, &content)
+            .await
+            .map_err(|e| anyhow!("Failed to write file {}: {}", self.path.display(), e))?;
+
+        let metadata = tokio::fs::metadata(&self.path)
+            .await
+            .map_err(|e| anyhow!("Failed to read metadata for {}: {}", self.path.display(), e))?;
+
+        let last_modified = metadata.modified().map_err(|e| {
+            anyhow!(
+                "Failed to get modification time for {}: {}",
+                self.path.display(),
+                e
+            )
+        })?;
+
+        self.content = content;
+        self.last_modified = last_modified;
+
         Ok(())
     }
 }
@@ -322,6 +373,39 @@ mod tests {
         // Verify dir2 entry still exists
         let remaining = Dotconf::select(&conn, "test/dir2/file1").await?;
         assert_eq!(remaining.content, "content for test/dir2/file1");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_backload() -> Result<()> {
+        let conn = setup_db().await?;
+        let test_time = SystemTime::UNIX_EPOCH + Duration::from_secs(1630000000);
+        let test_path = std::env::temp_dir().join("test_backload");
+
+        // Ensure test file doesn't exist
+        if test_path.exists() {
+            tokio::fs::remove_file(&test_path).await?;
+        }
+
+        // Create initial config and save to DB
+        let initial_content = "initial content".to_string();
+        let mut conf = Dotconf::new(test_path.clone(), initial_content.clone(), test_time);
+        conf.insert(&conn).await?;
+
+        // Write different content to file
+        let file_content = "file content".to_string();
+        tokio::fs::write(&test_path, &file_content).await?;
+
+        // Backload should restore DB content to file
+        conf.backload(&conn).await?;
+
+        // Verify file content matches DB content
+        let file_content = tokio::fs::read_to_string(&test_path).await?;
+        assert_eq!(file_content, initial_content);
+
+        // Clean up
+        tokio::fs::remove_file(&test_path).await?;
 
         Ok(())
     }
