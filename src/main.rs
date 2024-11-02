@@ -42,6 +42,8 @@ pub enum Actions {
     Copy {
         #[arg(short, long)]
         recursive: bool,
+        #[arg(short, long)]
+        backload: bool,
         paths: Vec<PathBuf>,
     },
 
@@ -100,7 +102,7 @@ async fn main() -> Result<()> {
     // Create prepared statements for common operations
     conn.execute_batch(
         "PRAGMA foreign_keys = ON;
-                       PRAGMA journal_mode = WAL;",
+                   PRAGMA journal_mode = WAL;",
     )?;
 
     match cli.command {
@@ -178,7 +180,11 @@ async fn main() -> Result<()> {
                 }
             }
         }
-        Actions::Copy { recursive, paths } => {
+        Actions::Copy {
+            recursive,
+            backload,
+            paths,
+        } => {
             let conn = Connection::open(&db_path)?;
 
             for base_path in paths {
@@ -190,25 +196,65 @@ async fn main() -> Result<()> {
                     {
                         let path = entry.path();
                         if path.is_file() {
-                            match Dotconf::from_file(path).await {
-                                Ok(mut dotconf) => {
-                                    dotconf.insert(&conn).await?;
-                                    println!("{} {:?}", "Successfully copied".green().bold(), path);
+                            if backload {
+                                if let Ok(mut dotconf) = Dotconf::select(&conn, path).await {
+                                    dotconf.backload(&conn).await?;
+                                    println!(
+                                        "{} {:?}",
+                                        "Successfully backloaded".green().bold(),
+                                        path
+                                    );
                                 }
-                                Err(e) => {
-                                    println!("{} {:?}: {}", "Failed to copy".red().bold(), path, e);
+                            } else {
+                                match Dotconf::from_file(path).await {
+                                    Ok(mut dotconf) => {
+                                        dotconf.insert(&conn).await?;
+                                        println!(
+                                            "{} {:?}",
+                                            "Successfully copied".green().bold(),
+                                            path
+                                        );
+                                    }
+                                    Err(e) => {
+                                        println!(
+                                            "{} {:?}: {}",
+                                            "Failed to copy".red().bold(),
+                                            path,
+                                            e
+                                        );
+                                    }
                                 }
                             }
                         }
                     }
                 } else {
-                    match Dotconf::from_file(&base_path).await {
-                        Ok(mut dotconf) => {
-                            dotconf.insert(&conn).await?;
-                            println!("{} {:?}", "Successfully copied".green().bold(), base_path);
+                    if backload {
+                        if let Ok(mut dotconf) = Dotconf::select(&conn, &base_path).await {
+                            dotconf.backload(&conn).await?;
+                            println!(
+                                "{} {:?}",
+                                "Successfully backloaded".green().bold(),
+                                base_path
+                            );
                         }
-                        Err(e) => {
-                            println!("{} {:?}: {}", "Failed to copy".red().bold(), base_path, e);
+                    } else {
+                        match Dotconf::from_file(&base_path).await {
+                            Ok(mut dotconf) => {
+                                dotconf.insert(&conn).await?;
+                                println!(
+                                    "{} {:?}",
+                                    "Successfully copied".green().bold(),
+                                    base_path
+                                );
+                            }
+                            Err(e) => {
+                                println!(
+                                    "{} {:?}: {}",
+                                    "Failed to copy".red().bold(),
+                                    base_path,
+                                    e
+                                );
+                            }
                         }
                     }
                 }

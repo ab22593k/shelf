@@ -58,21 +58,28 @@ impl Default for Suggestions {
                         "~/.gitignore_global",
                         "~/.gitmessage",
                         "~/.gitattributes",
+
                         // Mercurial
                         "~/.hgrc",
                         "~/.hgignore_global",
+
                         // Subversion
                         "~/.subversion/config",
                         "~/.subversion/servers",
+
                         // Bazaar
                         "~/.bazaar/bazaar.conf",
                         "~/.bazaar/ignore",
+
                         // Fossil
                         "~/.fossil",
+
                         // Perforce
                         "~/.p4config",
+
                         // CVS
                         "~/.cvsrc",
+
                         // Darcs
                         "~/.darcs/author",
                         "~/.darcs/defaults",
@@ -105,46 +112,65 @@ impl Default for Suggestions {
                         "~/.vimrc",
                         "~/.vim/",
                         "~/.config/nvim/init.vim",
+
                         // Emacs
                         "~/.emacs",
                         "~/.emacs.d/init.el",
                         "~/.doom.d/config.el",
+
                         // VS Code
                         "~/.vscode/settings.json",
                         "~/.config/Code/User/settings.json",
+
                         // JetBrains IDEs
                         "~/.ideavimrc",
                         "~/.intellij/config/options/",
+
                         // Sublime Text
                         "~/.config/sublime-text-3/Packages/User/Preferences.sublime-settings",
+
                         // Atom
                         "~/.atom/config.cson",
+
                         // Nano
                         "~/.nanorc",
+
                         // Notepad++
                         "~/AppData/Roaming/Notepad++/config.xml",
+
                         // Gedit
                         "~/.config/gedit/preferences.xml",
+
                         // Kate
                         "~/.config/katerc",
+
                         // TextMate
                         "~/Library/Application Support/TextMate/Bundles",
+
                         // BBEdit
                         "~/Library/Application Support/BBEdit/Setup",
+
                         // Brackets
                         "~/.brackets.json",
+
                         // Geany
                         "~/.config/geany/geany.conf",
+
                         // Komodo
                         "~/.komodoedit/X.Y/prefs.xml",
+
                         // Light Table
                         "~/.lighttable/settings.json",
+
                         // Coda
                         "~/Library/Application Support/Coda 2/",
+
                         // jEdit
                         "~/.jedit/properties",
+
                         // Eclipse
                         "~/.eclipse/org.eclipse.platform_*/configuration/config.ini",
+
                         // NetBeans
                         "~/.netbeans/X.Y/config/Preferences/org/netbeans/core/options/optionsfile.properties",
                     ],
@@ -199,7 +225,6 @@ impl Suggestions {
             let category = &self.categories[index];
             let files = &category.files;
 
-            println!("\nSelecting files for {}:", category.name);
             let selected = MultiSelect::new()
                 .with_prompt("Select files")
                 .items(files)
