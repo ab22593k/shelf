@@ -13,6 +13,7 @@ use clap_complete::{generate, Generator};
 use colored::*;
 use dotconf::suggest::Suggestions;
 use dotconf::Dotconf;
+use gitai::git::git_diff_cached;
 use gitai::providers::create_provider;
 use rusqlite::Connection;
 
@@ -301,7 +302,6 @@ async fn main() -> Result<()> {
         }
         Commands::Gitai { actions } => match actions {
             GitAIActions::Commit {
-                file,
                 provider: provider_override,
                 install,
                 uninstall,
@@ -329,138 +329,11 @@ async fn main() -> Result<()> {
 
                 let provider = create_provider(&config)?;
 
-                let diff = if let Some(path) = file {
-                    let mut opts = git2::DiffOptions::new();
-                    opts.pathspec(path);
-                    repo.diff_index_to_workdir(None, Some(&mut opts))?
-                } else {
-                    repo.diff_index_to_workdir(None, None)?
-                };
-
-                // Check if there are any changes
-                if !diff.stats()?.files_changed() == 0 {
-                    println!("{}", "No changes to commit.".yellow());
-                    return Ok(());
-                }
-
-                // Generate a structured diff summary
-                let mut diff_text = String::new();
-
-                // Add stats summary
-                let stats = diff.stats()?;
-                diff_text.push_str(&format!(
-                    "Changed {} files with {} insertions(+) and {} deletions(-)\n\n",
-                    stats.files_changed(),
-                    stats.insertions(),
-                    stats.deletions()
-                ));
-
-                // Add file changes
-                let mut current_file = String::new();
-                diff.print(git2::DiffFormat::Patch, |delta, hunk, line| {
-                    let content = std::str::from_utf8(line.content()).unwrap_or("");
-
-                    // Track file changes
-                    if let Some(new_file) = delta.new_file().path() {
-                        let new_file = new_file.to_string_lossy();
-                        if new_file != current_file {
-                            current_file = new_file.to_string();
-                            diff_text.push_str(&format!("\nIn {}:\n", current_file));
-                        }
-                    }
-
-                    // Add hunk header if available
-                    if let Some(hunk) = hunk {
-                        if let Ok(header) = std::str::from_utf8(hunk.header()) {
-                            diff_text.push_str(&format!("@@ {} @@\n", header));
-                        }
-                    }
-
-                    // Add line changes
-                    match line.origin() {
-                        '+' => diff_text.push_str(&format!("Added: {}", content)),
-                        '-' => diff_text.push_str(&format!("Removed: {}", content)),
-                        _ => {}
-                    }
-                    true
-                })?;
-
                 // Generate and clean up commit message
-                let mut commit_msg = provider.generate_commit_message(&diff_text).await?;
-
-                // Remove potential duplicate prefixes and clean up formatting
-                commit_msg = commit_msg
-                    .lines()
-                    .filter(|line| !line.trim().is_empty())
-                    .map(|line| line.trim())
-                    .filter(|line| {
-                        !line.starts_with("- ")
-                            && !line.starts_with("* ")
-                            && !line.starts_with("• ")
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
-
-                // Clean up conventional commit format
-                if commit_msg.contains("\n") {
-                    let mut parts: Vec<_> = commit_msg
-                        .split('\n')
-                        .map(|s| s.to_string())
-                        .take(2)
-                        .collect();
-
-                    if !parts[0].contains(": ") {
-                        let commit_type = if parts[0].to_lowercase().contains("fix")
-                            || parts[0].to_lowercase().contains("bug")
-                        {
-                            "fix"
-                        } else if parts[0].to_lowercase().contains("feat")
-                            || parts[0].to_lowercase().contains("add")
-                        {
-                            "feat"
-                        } else if parts[0].to_lowercase().contains("refactor") {
-                            "refactor"
-                        } else if parts[0].to_lowercase().contains("test") {
-                            "test"
-                        } else if parts[0].to_lowercase().contains("doc") {
-                            "docs"
-                        } else if parts[0].to_lowercase().contains("style") {
-                            "style"
-                        } else {
-                            "chore"
-                        };
-                        parts[0] = format!("{}: {}", commit_type, parts[0]);
-                    }
-                    commit_msg = if parts.len() > 1 {
-                        format!("{}\n\n{}", parts[0], parts[1])
-                    } else {
-                        parts[0].clone()
-                    };
-                } else if !commit_msg.contains(": ") {
-                    let commit_type = if commit_msg.to_lowercase().contains("fix")
-                        || commit_msg.to_lowercase().contains("bug")
-                    {
-                        "fix"
-                    } else if commit_msg.to_lowercase().contains("feat")
-                        || commit_msg.to_lowercase().contains("add")
-                    {
-                        "feat"
-                    } else if commit_msg.to_lowercase().contains("refactor") {
-                        "refactor"
-                    } else if commit_msg.to_lowercase().contains("test") {
-                        "test"
-                    } else if commit_msg.to_lowercase().contains("doc") {
-                        "docs"
-                    } else if commit_msg.to_lowercase().contains("style") {
-                        "style"
-                    } else {
-                        "chore"
-                    };
-                    commit_msg = format!("{}: {}", commit_type, commit_msg);
-                }
-
+                let mut commit_msg = provider
+                    .generate_commit_message(&git_diff_cached(&repo)?)
+                    .await?;
                 commit_msg = commit_msg.trim().to_string();
-
                 println!(
                     "{}\n{}",
                     "Generated commit message:".green().bold(),

@@ -67,8 +67,6 @@ pub enum GitAIActions {
         about = "Generate a commit message using AI or install git hook"
     )]
     Commit {
-        #[arg(short, long)]
-        file: Option<PathBuf>,
         #[arg(short, long, help = "Override the configured AI provider")]
         provider: Option<String>,
         #[arg(long, help = "Install the prepare-commit-msg hook")]

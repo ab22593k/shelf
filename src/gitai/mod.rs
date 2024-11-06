@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 pub mod config;
+pub mod git;
 pub mod providers;
 
 #[async_trait]
@@ -28,7 +29,11 @@ pub struct GitAIConfig {
 
 impl GitAIConfig {
     pub async fn load() -> Result<Self> {
-        config::load_config(None)
+        Self::load_from(None).await
+    }
+
+    pub async fn load_from(path: Option<PathBuf>) -> Result<Self> {
+        config::load_config(path)
     }
 
     pub fn set(&mut self, key: &str, value: &str) -> Result<()> {
@@ -61,7 +66,11 @@ impl GitAIConfig {
     }
 
     pub async fn save(&self) -> Result<()> {
-        config::save_config(self, None)
+        self.save_to(None).await
+    }
+
+    pub async fn save_to(&self, path: Option<PathBuf>) -> Result<()> {
+        config::save_config(self, path)
     }
 
     pub fn list(&self) -> Vec<(&str, String)> {
@@ -115,10 +124,18 @@ pub struct GitAI {
 
 impl GitAI {
     pub async fn new(config_path: Option<PathBuf>) -> Result<Self> {
-        let config = config::load_config(config_path)?;
+        let config = GitAIConfig::load_from(config_path).await?;
         let provider = providers::create_provider(&config)?;
 
         Ok(Self { config, provider })
+    }
+
+    pub fn config(&self) -> &GitAIConfig {
+        &self.config
+    }
+
+    pub fn config_mut(&mut self) -> &mut GitAIConfig {
+        &mut self.config
     }
 
     pub async fn generate_commit_message(&self, diff: &str) -> Result<String> {

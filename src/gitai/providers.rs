@@ -149,18 +149,24 @@ pub struct OllamaProvider {
     model: String,
 }
 
+impl Default for OllamaProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl OllamaProvider {
     pub fn new() -> Self {
         Self {
             host: "http://localhost:11434".to_string(),
-            model: "deepseek-coder-v2".to_string(),
+            model: "qwen2.5-coder".to_string(),
         }
     }
 
     pub fn with_config(host: Option<String>, model: Option<String>) -> Self {
         Self {
             host: host.unwrap_or_else(|| "http://localhost:11434".to_string()),
-            model: model.unwrap_or_else(|| "deepseek-coder-v2".to_string()),
+            model: model.unwrap_or_else(|| "qwen2.5-coder".to_string()),
         }
     }
 }
@@ -175,8 +181,7 @@ impl Provider for OllamaProvider {
                 "model": self.model,
                 "prompt": format!(
                     "You are an expert git commit message generator. Given a git diff, create a single, concise commit message following these rules:
-
-                      - Use imperative mood (e.g 'Add' not 'Adds')
+                      - Use imperative mood (e.g. 'Add' not 'Adds')
                       - Start with a capital letter
                       - No period at the end
                       - Maximum 72 characters
