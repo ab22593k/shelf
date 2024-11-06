@@ -20,7 +20,10 @@ pub enum Commands {
     },
 
     #[command(about = "Git commands with AI assistance")]
-    Gitai,
+    Gitai {
+        #[command(subcommand)]
+        actions: GitAIActions,
+    },
 
     #[command(about = "Generate shell completion scripts")]
     Completion {
@@ -55,4 +58,48 @@ pub enum DotconfActions {
         #[arg(short, long)]
         interactive: bool,
     },
+}
+
+#[derive(Subcommand)]
+pub enum GitAIActions {
+    #[command(
+        name = "commit",
+        about = "Generate a commit message using AI or install git hook"
+    )]
+    Commit {
+        #[arg(short, long)]
+        file: Option<PathBuf>,
+        #[arg(short, long, help = "Override the configured AI provider")]
+        provider: Option<String>,
+        #[arg(long, help = "Install the prepare-commit-msg hook")]
+        install: bool,
+        #[arg(long, help = "Remove the prepare-commit-msg hook")]
+        uninstall: bool,
+    },
+
+    #[command(name = "config", about = "Configure GitAI settings")]
+    Config {
+        #[command(subcommand)]
+        action: GitAIConfigActions,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum GitAIConfigActions {
+    #[command(name = "set", about = "Set a configuration value")]
+    Set {
+        #[arg(help = "Configuration key")]
+        key: String,
+        #[arg(help = "Configuration value")]
+        value: String,
+    },
+
+    #[command(name = "get", about = "Get a configuration value")]
+    Get {
+        #[arg(help = "Configuration key")]
+        key: String,
+    },
+
+    #[command(name = "list", about = "List all configuration values")]
+    List,
 }
