@@ -2,13 +2,23 @@
 
 [![Shelf CI](https://github.com/ab22593k/shelf/actions/workflows/ci.yml/badge.svg)](https://github.com/ab22593k/shelf/actions/workflows/ci.yml)
 
-Shelf is a command-line tool for managing dotconf files. It allows you to track, list, remove files with ease.
+Shelf is a command-line tool for managing dotconf files and generating git
+commit messages using AI. It provides a simple interface to track dotfiles
+across your system and integrates with multiple AI providers to automatically
+generate meaningful commit messages through git hooks. With support for local
+and cloud-based AI models, Shelf makes both dotfile management and git commits effortless.
 
 ## Features
 
-- Track dotconf files from anywhere in your file system recursively.
-- List all tracked dotfiles.
-- Remove dotconf files recursively from database.
+- Track dotconf files from anywhere in your file system recursively
+- List all tracked dotfiles
+- Remove dotconf files recursively from database
+- AI-powered git commit message generation with multiple providers:
+  - Ollama (default, local)
+  - OpenAI
+  - Anthropic Claude (coming soon)
+  - Google Gemini (coming soon)
+- Git hooks integration for automatic commit message generation
 
 ## Installation
 
@@ -21,7 +31,9 @@ cargo install --path .
 ```
 ## Usage
 
-Shelf provides several commands to manage your dotfiles:
+Shelf provides commands for both dotfile management and git integration:
+
+### Dotfile Management
 
 ```bash
 # Add a new dotfile to track
@@ -41,6 +53,49 @@ slf --help
 ```
 
 Each command can be run with `-h` or `--help` for more information.
+
+### Git AI Integration
+
+The `gitai` subcommand provides AI-powered git commit message generation:
+
+```bash
+# Generate commit message for staged changes
+slf gitai commit
+
+# Install git hook for automatic message generation
+slf gitai commit --install
+
+# Remove git hook
+slf gitai commit --uninstall
+
+# Configure AI provider
+slf gitai config set provider openai
+slf gitai config set openai_api_key "your-api-key"
+
+# Use specific provider for one commit
+slf gitai commit -p openai
+
+# List current configuration
+slf gitai config list
+```
+
+The GitAI features support multiple AI providers:
+- **Ollama** (default): Local, privacy-friendly AI using models like Qwen
+- **OpenAI**: Cloud-based using GPT models
+- **Anthropic Claude**: Coming soon
+- **Google Gemini**: Coming soon
+
+The git hook integrates seamlessly with your normal git workflow:
+```bash
+# Hook will automatically generate message if none provided
+git commit
+
+# Your message takes precedence
+git commit -m "feat: your message"
+
+# AI helps with amending
+git commit --amend
+```
 
 ## Shell Completion
 
@@ -71,6 +126,25 @@ To use the completion scripts:
 
 After setting up the completion script, restart your shell or source the respective configuration file to enable completions for the `slf` command.
 
+## Configuration
+
+GitAI settings are stored in `~/.config/shelf/gitai.json` (or `$XDG_CONFIG_HOME/shelf/gitai.json` if set). You can configure:
+
+- `provider`: AI provider to use (`ollama`, `openai`, `anthropic`, `gemini`)
+- `ollama_host`: Ollama server URL (default: `http://localhost:11434`)
+- `ollama_model`: Ollama model to use (default: `qwen2.5-coder`)
+- `openai_api_key`: OpenAI API key for GPT models
+- `project_context`: Optional project-specific context for better commits
+
+Example configuration:
+```json
+{
+  "provider": "ollama",
+  "ollama_host": "http://localhost:11434",
+  "ollama_model": "qwen2.5-coder",
+  "project_context": "Rust CLI tool for dotfile management"
+}
+```
 ## Development
 
 To build the project locally:
