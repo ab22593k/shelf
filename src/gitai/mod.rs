@@ -2,6 +2,7 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
+use providers::{OLLAMA_HOST, OLLAMA_MODEL};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -13,6 +14,32 @@ pub mod providers;
 pub trait Provider: Send + Sync {
     async fn generate_commit_message(&self, diff: &str) -> Result<String>;
     fn name(&self) -> &'static str;
+}
+
+pub struct GitAI {
+    config: GitAIConfig,
+    provider: Box<dyn Provider>,
+}
+
+impl GitAI {
+    pub async fn new(config_path: Option<PathBuf>) -> Result<Self> {
+        let config = GitAIConfig::load_from(config_path).await?;
+        let provider = providers::create_provider(&config)?;
+
+        Ok(Self { config, provider })
+    }
+
+    pub fn config(&self) -> &GitAIConfig {
+        &self.config
+    }
+
+    pub fn config_mut(&mut self) -> &mut GitAIConfig {
+        &mut self.config
+    }
+
+    pub async fn generate_commit_message(&self, diff: &str) -> Result<String> {
+        self.provider.generate_commit_message(diff).await
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -109,36 +136,10 @@ impl Default for GitAIConfig {
             openai_api_key: None,
             anthropic_api_key: None,
             gemini_api_key: None,
-            ollama_host: Some("http://localhost:11434".to_string()),
-            ollama_model: Some("qwen2.5-coder".to_string()),
+            ollama_host: Some(OLLAMA_HOST.to_string()),
+            ollama_model: Some(OLLAMA_MODEL.to_string()),
             assistant_thread_id: None,
             project_context: None,
         }
-    }
-}
-
-pub struct GitAI {
-    config: GitAIConfig,
-    provider: Box<dyn Provider>,
-}
-
-impl GitAI {
-    pub async fn new(config_path: Option<PathBuf>) -> Result<Self> {
-        let config = GitAIConfig::load_from(config_path).await?;
-        let provider = providers::create_provider(&config)?;
-
-        Ok(Self { config, provider })
-    }
-
-    pub fn config(&self) -> &GitAIConfig {
-        &self.config
-    }
-
-    pub fn config_mut(&mut self) -> &mut GitAIConfig {
-        &mut self.config
-    }
-
-    pub async fn generate_commit_message(&self, diff: &str) -> Result<String> {
-        self.provider.generate_commit_message(diff).await
     }
 }

@@ -12,6 +12,18 @@ use genai::{
 use reqwest;
 use serde_json;
 
+pub const PROMPT: &str = "You are a Git commit message generator. Given a git diff
+output, create a clear and concise commit message.
+    - Transform technical changes into human-readable commit messages:
+      1. if changes are too small make a brief summary of the changes (from 1 to 2 lines)
+      2. if changes are somewhat big make summary for the changes (from 3 to 4 lines)
+      3. add some useful emojis
+      4. do not add anything out of context like: ``` OR **
+      5, Do not use the active form";
+
+pub const OLLAMA_HOST: &str = "http://localhost:11434";
+pub const OLLAMA_MODEL: &str = "qwen2.5-coder";
+
 pub fn create_provider(config: &GitAIConfig) -> Result<Box<dyn Provider>> {
     let provider: Box<dyn Provider> = match config.provider.as_str() {
         "openai" => {
@@ -68,14 +80,9 @@ impl OpenAIProvider {
 #[async_trait]
 impl Provider for OpenAIProvider {
     async fn generate_commit_message(&self, diff: &str) -> Result<String> {
-        let prompt = format!(
-            "Generate a concise and descriptive commit message for the following git diff:\n\n{}",
-            diff
-        );
+        let prompt = format!("{}\n\n{}", PROMPT, diff);
 
-        let chat_request = ChatRequest::default()
-            .with_system("You are a helpful assistant that generates git commit messages.")
-            .append_message(ChatMessage::user(&prompt));
+        let chat_request = ChatRequest::default().append_message(ChatMessage::user(&prompt));
 
         let response = self
             .client
@@ -97,13 +104,22 @@ impl Provider for OpenAIProvider {
 }
 
 pub struct AnthropicProvider {
-    api_key: String,
+    client: Client,
+    model: String,
 }
 
 impl AnthropicProvider {
     pub fn new(api_key: &str) -> Self {
+        let api_key = api_key.to_string();
+        let auth_resolver = AuthResolver::from_resolver_fn(
+            move |_model_iden: ModelIden| -> Result<Option<AuthData>, genai::resolver::Error> {
+                Ok(Some(AuthData::from_single(api_key.clone())))
+            },
+        );
+
         Self {
-            api_key: api_key.to_string(),
+            client: Client::builder().with_auth_resolver(auth_resolver).build(),
+            model: "claude-3.5-sonnet".to_string(),
         }
     }
 }
@@ -111,8 +127,22 @@ impl AnthropicProvider {
 #[async_trait]
 impl Provider for AnthropicProvider {
     async fn generate_commit_message(&self, diff: &str) -> Result<String> {
-        // TODO: Implement Anthropic Claude API integration
-        Err(anyhow!("Anthropic provider not yet implemented"))
+        let prompt = format!("{}\n\n{}", PROMPT, diff);
+
+        let chat_request = ChatRequest::default().append_message(ChatMessage::user(&prompt));
+
+        let response = self
+            .client
+            .exec_chat(&self.model, chat_request, None)
+            .await?;
+
+        Ok(response
+            .content
+            .unwrap()
+            .text_as_str()
+            .unwrap()
+            .trim()
+            .to_string())
     }
 
     fn name(&self) -> &'static str {
@@ -121,13 +151,22 @@ impl Provider for AnthropicProvider {
 }
 
 pub struct GeminiProvider {
-    api_key: String,
+    client: Client,
+    model: String,
 }
 
 impl GeminiProvider {
     pub fn new(api_key: &str) -> Self {
+        let api_key = api_key.to_string();
+        let auth_resolver = AuthResolver::from_resolver_fn(
+            move |_model_iden: ModelIden| -> Result<Option<AuthData>, genai::resolver::Error> {
+                Ok(Some(AuthData::from_single(api_key.clone())))
+            },
+        );
+
         Self {
-            api_key: api_key.to_string(),
+            client: Client::builder().with_auth_resolver(auth_resolver).build(),
+            model: "gemini-1.5-flash".to_string(),
         }
     }
 }
@@ -135,8 +174,22 @@ impl GeminiProvider {
 #[async_trait]
 impl Provider for GeminiProvider {
     async fn generate_commit_message(&self, diff: &str) -> Result<String> {
-        // TODO: Implement Google Gemini API integration
-        Err(anyhow!("Gemini provider not yet implemented"))
+        let prompt = format!("{}\n\n{}", PROMPT, diff);
+
+        let chat_request = ChatRequest::default().append_message(ChatMessage::user(&prompt));
+
+        let response = self
+            .client
+            .exec_chat(&self.model, chat_request, None)
+            .await?;
+
+        Ok(response
+            .content
+            .unwrap()
+            .text_as_str()
+            .unwrap()
+            .trim()
+            .to_string())
     }
 
     fn name(&self) -> &'static str {
@@ -158,15 +211,15 @@ impl Default for OllamaProvider {
 impl OllamaProvider {
     pub fn new() -> Self {
         Self {
-            host: "http://localhost:11434".to_string(),
-            model: "qwen2.5-coder".to_string(),
+            host: OLLAMA_HOST.to_string(),
+            model: OLLAMA_MODEL.to_string(),
         }
     }
 
     pub fn with_config(host: Option<String>, model: Option<String>) -> Self {
         Self {
-            host: host.unwrap_or_else(|| "http://localhost:11434".to_string()),
-            model: model.unwrap_or_else(|| "qwen2.5-coder".to_string()),
+            host: host.unwrap_or_else(|| OLLAMA_HOST.to_string()),
+            model: model.unwrap_or_else(|| OLLAMA_MODEL.to_string()),
         }
     }
 }
@@ -175,33 +228,18 @@ impl OllamaProvider {
 impl Provider for OllamaProvider {
     async fn generate_commit_message(&self, diff: &str) -> Result<String> {
         let client = reqwest::Client::new();
-        let response = client
+        let request = client
             .post(format!("{}/api/generate", self.host))
             .json(&serde_json::json!({
                 "model": self.model,
-                "prompt": format!(
-                    "You are an expert git commit message generator. Given a git diff, create a single, concise commit message following these rules:
-                      - Use imperative mood (e.g. 'Add' not 'Adds')
-                      - Start with a capital letter
-                      - No period at the end
-                      - Maximum 72 characters
-                      - Focus on what changed and why
-                      - Highlight scope of changes (e.g. which components)
-                      - Be specific but concise
-                      - One line only
-
-                      Format your response as a single line of text with no prefix or explanation.
-
-                      Here is the diff to analyze:\n{}",
-                    diff
-                ),
+                "prompt": format!("{}\n{}", PROMPT, diff),
                 "stream": false
             }))
             .send()
             .await?;
 
-        let response = response.json::<serde_json::Value>().await?;
-        Ok(response["response"]
+        let response_json: serde_json::Value = serde_json::from_str(&request.text().await?)?;
+        Ok(response_json["response"]
             .as_str()
             .ok_or_else(|| anyhow!("Invalid response from Ollama"))?
             .trim()

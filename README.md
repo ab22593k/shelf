@@ -16,8 +16,8 @@ and cloud-based AI models, Shelf makes both dotfile management and git commits e
 - AI-powered git commit message generation with multiple providers:
   - Ollama (default, local)
   - OpenAI
-  - Anthropic Claude (coming soon)
-  - Google Gemini (coming soon)
+  - Anthropic Claude
+  - Google Gemini
 - Git hooks integration for automatic commit message generation
 
 ## Installation
@@ -82,8 +82,8 @@ slf gitai config list
 The GitAI features support multiple AI providers:
 - **Ollama** (default): Local, privacy-friendly AI using models like Qwen
 - **OpenAI**: Cloud-based using GPT models
-- **Anthropic Claude**: Coming soon
-- **Google Gemini**: Coming soon
+- **Anthropic Claude**: Cloud-based using Claude models
+- **Google Gemini**: Cloud-based using Gemini models
 
 The git hook integrates seamlessly with your normal git workflow:
 ```bash

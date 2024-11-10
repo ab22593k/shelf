@@ -39,18 +39,20 @@ pub enum DotconfActions {
 
     #[command(name = "rm", about = "Remove dotconf files from management")]
     Remove {
+        paths: Vec<PathBuf>,
+
         #[arg(short, long)]
         recursive: bool,
-        paths: Vec<PathBuf>,
     },
 
     #[command(name = "cp", about = "Create a dotconf files copy")]
     Copy {
+        paths: Vec<PathBuf>,
+
         #[arg(short, long)]
         recursive: bool,
         #[arg(short, long)]
         backload: bool,
-        paths: Vec<PathBuf>,
     },
 
     #[command(about = "Suggest commonly used dotconf[s] cross diffrent OS's")]
