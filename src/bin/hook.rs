@@ -4,12 +4,13 @@
 // git commit --squash HEAD~3  # Generates message for squashed changes
 // git merge branch  # Uses git's merge message
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 use clap::Parser;
 use colored::*;
-use git2::Repository;
-use slf::gitai::git::git_diff_cached;
-use slf::gitai::GitAI;
+use slf::gitai::git::git_diff;
+use slf::gitai::providers::create_provider;
+use slf::gitai::GitAIConfig;
+use slf::spinner;
 use std::path::PathBuf;
 use std::process::exit;
 
@@ -50,12 +51,16 @@ struct Args {
     sha1: Option<String>,
 }
 
-async fn handle_commit(args: &Args, repo: &Repository) -> Result<()> {
+async fn handle_commit(args: &Args) -> Result<()> {
     // Generate commit message from detailed diff
-    let gitai = GitAI::new(None).await?;
-    let mut commit_msg = gitai
-        .generate_commit_message(&git_diff_cached(repo)?)
-        .await?;
+    let config = GitAIConfig::load().await?;
+    let provider = create_provider(&config)?;
+
+    let mut commit_msg = spinner::wrap_spinner(|| async {
+        let diff = git_diff();
+        provider.generate_commit_message(&diff?).await
+    })
+    .await?;
 
     commit_msg = commit_msg.trim().to_string();
 
@@ -82,9 +87,7 @@ async fn main() -> Result<()> {
         }
     }
 
-    let repo = Repository::open_from_env().context("Failed to open git repository")?;
-
-    if let Err(e) = handle_commit(&args, &repo).await {
+    if let Err(e) = handle_commit(&args).await {
         eprintln!("{} {}", "Error:".red().bold(), e);
         exit(1);
     }

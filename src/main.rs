@@ -16,7 +16,7 @@ use dotconf::suggest::Suggestions;
 use dotconf::Dotconf;
 use gitai::config::remove_git_hook;
 use gitai::providers::create_provider;
-use gitai::{config::install_git_hook, git::git_diff_cached};
+use gitai::{config::install_git_hook, git::git_diff};
 use rusqlite::Connection;
 use walkdir::WalkDir;
 
@@ -291,13 +291,13 @@ async fn main() -> Result<()> {
 
                 let provider = create_provider(&config)?;
 
-                let commit_msg = spinner::embed_spinner(|| async {
-                    let diff = git_diff_cached(&repo);
+                let commit_msg = spinner::wrap_spinner(|| async {
+                    let diff = git_diff();
                     provider.generate_commit_message(&diff?).await
                 })
                 .await?;
 
-                let commit_msg = commit_msg.trim().to_string();
+                let commit_msg = commit_msg.to_string();
                 println!(
                     "{}\n{}",
                     "Generated commit message:".green().bold(),
