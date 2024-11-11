@@ -1,4 +1,4 @@
-# Shelf - Dotconf Manager
+# Shelf: AI-Powered tools for developers
 
 [![Shelf CI](https://github.com/ab22593k/shelf/actions/workflows/ci.yml/badge.svg)](https://github.com/ab22593k/shelf/actions/workflows/ci.yml)
 
@@ -142,7 +142,7 @@ Example configuration:
   "provider": "ollama",
   "ollama_host": "http://localhost:11434",
   "ollama_model": "qwen2.5-coder",
-  "project_context": "Rust CLI tool for dotfile management"
+  "project_context": "AI-Powered tools for developers"
 }
 ```
 ## Development
