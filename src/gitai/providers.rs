@@ -12,17 +12,16 @@ use genai::{
 use reqwest;
 use serde_json;
 
+pub const OLLAMA_HOST: &str = "http://localhost:11434";
+pub const OLLAMA_MODEL: &str = "qwen2.5-coder";
+
 pub const PROMPT: &str = "You are a Git commit message generator. Given a git diff
 output, create a clear and concise commit message.
     - Transform technical changes into human-readable commit messages:
-      1. if changes are too small make a brief summary of the changes (from 1 to 2 lines)
+      1. add one single emoji if changes are too small make a brief summary of the changes (from 1 to 2 lines)
       2. if changes are somewhat big make summary for the changes (from 3 to 4 lines)
-      3. add some useful emojis
       4. do not add anything out of context like: ``` OR **
       5, Do not use the active form";
-
-pub const OLLAMA_HOST: &str = "http://localhost:11434";
-pub const OLLAMA_MODEL: &str = "qwen2.5-coder";
 
 pub fn create_provider(config: &GitAIConfig) -> Result<Box<dyn Provider>> {
     let provider: Box<dyn Provider> = match config.provider.as_str() {
