@@ -37,16 +37,16 @@ Shelf provides commands for both dotfile management and git integration:
 
 ```bash
 # Add a new dotfile to track
-slf cp ~/.bashrc
+slf dotconf cp ~/.bashrc
 
 # List all tracked dotfiles
-slf ls
+slf dotconf ls
 
 # Remove a dotfile from tracking
-slf rm ~/.bashrc
+slf dotconf rm ~/.bashrc
 
 # Interactive selection of dotfiles to track
-slf suggest -i
+slf dotconf suggest -i
 
 # Show help
 slf --help
@@ -152,7 +152,6 @@ To build the project locally:
 ```
 cargo build
 ```
-
 To run tests:
 
 ```
@@ -161,14 +160,14 @@ cargo test
 To run the project directly without installing:
 
 ```
-cargo run -- [SUBCOMMAND]
+cargo run --bin slf -- [SUBCOMMAND]
 ```
 
-Replace `[SUBCOMMAND]` with the command you want to run, such as `cp`, `ls`, or `rm`.
+Replace `[SUBCOMMAND]` with the command you want to run, such as `dotconf` or `gitai`.
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+Contributions are welcome! Please feel free tor submit a Pull Request.
 
 ## License
 
