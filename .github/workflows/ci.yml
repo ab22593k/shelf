@@ -59,7 +59,7 @@ jobs:
 
   publish:
     name: Publish
-    needs: [clippy, fmt]
+    needs: [build, clippy, fmt]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     steps:
