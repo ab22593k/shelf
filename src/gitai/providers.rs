@@ -15,13 +15,12 @@ use serde_json;
 pub const OLLAMA_HOST: &str = "http://localhost:11434";
 pub const OLLAMA_MODEL: &str = "qwen2.5-coder";
 
-pub const PROMPT: &str = "You are a Git commit message generator. Given a git diff
-output, create a clear and concise commit message.
-    - Transform technical changes into human-readable commit messages:
-      1. add one single emoji if changes are too small make a brief summary of the changes (from 1 to 2 lines)
-      2. if changes are somewhat big make summary for the changes (from 3 to 4 lines)
-      4. do not add anything out of context like: ``` OR **
-      5, Do not use the active form";
+pub const PROMPT: &str =
+    "You are a Git commit message generator. create a clear and concise commit message.
+ ** Rules:
+ * Use the imperative mood: Write the message as a command, e.g., 'Fix bug' instead of 'Fixed bug.'
+ * Keep it concise: brief and informative message on batch of similar changes.
+ * Use a consistent style: Follow a consistent formatting style.";
 
 pub fn create_provider(config: &GitAIConfig) -> Result<Box<dyn Provider>> {
     let provider: Box<dyn Provider> = match config.provider.as_str() {
@@ -231,7 +230,7 @@ impl Provider for OllamaProvider {
             .post(format!("{}/api/generate", self.host))
             .json(&serde_json::json!({
                 "model": self.model,
-                "prompt": format!("{}\n{}", PROMPT, diff),
+                "prompt": format!("{}\nProvided git diff:\n{}", PROMPT, diff),
                 "stream": false
             }))
             .send()

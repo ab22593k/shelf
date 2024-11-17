@@ -1,19 +1,13 @@
-//! Manages and suggests common configuration files (dotconf).
-//! Provides listing and interactive selection functionality.
+//! Manages and suggests common configuration files (dotconf) files.
 
 use anyhow::Result;
 
-/// Collection of dotconf suggestions organized by categories.
-///
-/// Contains categorized configuration file suggestions and methods for
-/// displaying and selecting them interactively.
+/// Collection of [`Dotconf`] suggestions organized by categories.
 pub struct Suggestions {
     categories: Vec<Category>,
 }
 
-/// Category of configuration files with name and file paths.
-///
-/// Groups related configuration files for easier organization.
+/// Category of [`Dotconf`] files with name and file paths.
 struct Category {
     name: &'static str,
     files: Vec<&'static str>,
@@ -21,9 +15,6 @@ struct Category {
 
 impl Default for Suggestions {
     /// Creates new Suggestions with predefined categories.
-    ///
-    /// Initializes with common configuration files across categories like
-    /// Shell, VCS, Editors, etc.
     fn default() -> Self {
         Self {
             categories: vec![
@@ -98,14 +89,23 @@ impl Default for Suggestions {
                     files: vec!["~/.xinitrc", "~/.Xresources", "~/.xprofile", "~/.Xmodmap"],
                 },
                 Category {
-                    name: "macOS",
+                    name: "Wayland",
                     files: vec![
-                        "~/Library/Preferences/",
-                        "~/.config/karabiner/karabiner.json",
-                        "~/.config/alacritty/alacritty.yml",
+                        "~/.config/wayland-session",
+                        "~/.config/waybar/config",
+                        "~/.config/waybar/style.css",
+                        "~/.config/river/init",
+                        "~/.config/hypr/hyprland.conf",
+                        "~/.config/foot/foot.ini",
+                        "~/.config/mako/config",
+                        "~/.config/gammastep/config.ini",
+                        "~/.config/kanshi/config",
+                        "~/.config/wofi/config",
+                        "~/.config/wlroots/wlr-randr.ini",
+                        "~/.config/weston.ini",
                     ],
                 },
-                Category {
+               Category {
                     name: "Editors",
                     files: vec![
                         // Vim
@@ -176,7 +176,7 @@ impl Default for Suggestions {
                     ],
                 },
                 Category {
-                    name: "Window Managers",
+                    name: "Desktop WM",
                     files: vec![
                         "~/.config/i3/config",
                         "~/.config/sway/config",
@@ -206,8 +206,6 @@ impl Suggestions {
     }
 
     /// Interactive multi-select interface for choosing configuration files.
-    ///
-    /// Returns selected file paths or error if selection fails.
     pub fn interactive_selection(&self) -> Result<Vec<String>, Box<dyn std::error::Error>> {
         use dialoguer::MultiSelect;
 

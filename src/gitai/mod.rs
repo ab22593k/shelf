@@ -1,45 +1,19 @@
-#![allow(unused)]
+pub mod git;
+pub mod providers;
 
 use anyhow::Result;
 use async_trait::async_trait;
 use providers::{OLLAMA_HOST, OLLAMA_MODEL};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 
-pub mod config;
-pub mod git;
-pub mod providers;
+use crate::config::ShelfConfig;
 
 #[async_trait]
 pub trait Provider: Send + Sync {
     async fn generate_commit_message(&self, diff: &str) -> Result<String>;
+
+    #[allow(unused)]
     fn name(&self) -> &'static str;
-}
-
-pub struct GitAI {
-    config: GitAIConfig,
-    provider: Box<dyn Provider>,
-}
-
-impl GitAI {
-    pub async fn new(config_path: Option<PathBuf>) -> Result<Self> {
-        let config = GitAIConfig::load_from(config_path).await?;
-        let provider = providers::create_provider(&config)?;
-
-        Ok(Self { config, provider })
-    }
-
-    pub fn config(&self) -> &GitAIConfig {
-        &self.config
-    }
-
-    pub fn config_mut(&mut self) -> &mut GitAIConfig {
-        &mut self.config
-    }
-
-    pub async fn generate_commit_message(&self, diff: &str) -> Result<String> {
-        self.provider.generate_commit_message(diff).await
-    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -56,11 +30,7 @@ pub struct GitAIConfig {
 
 impl GitAIConfig {
     pub async fn load() -> Result<Self> {
-        Self::load_from(None).await
-    }
-
-    pub async fn load_from(path: Option<PathBuf>) -> Result<Self> {
-        config::load_config(path)
+        ShelfConfig::load_config()
     }
 
     pub fn set(&mut self, key: &str, value: &str) -> Result<()> {
@@ -93,11 +63,7 @@ impl GitAIConfig {
     }
 
     pub async fn save(&self) -> Result<()> {
-        self.save_to(None).await
-    }
-
-    pub async fn save_to(&self, path: Option<PathBuf>) -> Result<()> {
-        config::save_config(self, path)
+        ShelfConfig::save_config(self)
     }
 
     pub fn list(&self) -> Vec<(&str, String)> {

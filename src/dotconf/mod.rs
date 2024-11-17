@@ -28,6 +28,7 @@ impl Dotconf {
         self.path
     }
 
+    /// Creates a new `Dotconf` instance from a file on disk.
     pub async fn from_file(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
         let content = tokio::fs::read_to_string(path)
@@ -49,6 +50,7 @@ impl Dotconf {
         Ok(Self::new(path.to_path_buf(), content, last_modified))
     }
 
+    /// Retrieves a `Dotconf` instance from the database based on the given file path.
     pub async fn select(conn: &Connection, path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
 
@@ -66,6 +68,7 @@ impl Dotconf {
         Ok(Self::new(path.to_path_buf(), content, last_modified))
     }
 
+    /// Inserts/Updates the `Dotconf` instance in the database.
     pub async fn insert(&mut self, conn: &Connection) -> Result<()> {
         let unix_timestamp = self
             .last_modified
@@ -84,6 +87,7 @@ impl Dotconf {
         Ok(())
     }
 
+    /// Removes a `Dotconf` instance from the database based on the given file path.
     pub async fn remove(conn: &Connection, path: impl AsRef<Path>) -> Result<()> {
         let path = path.as_ref();
         conn.execute(
@@ -94,21 +98,7 @@ impl Dotconf {
     }
 
     /// Restores the file on disk using content from the database.
-    ///
-    /// This method will:
-    /// 1. Query the content from the database for this file's path
-    /// 2. Write that content back to the file on disk
-    /// 3. Update internal state with new content and modification time
-    ///
-    /// # Returns
-    /// - `Ok(())` if the backload was successful
-    /// - `Err` if database query fails or file operations fail
-    ///
-    /// # Errors
-    /// - If the database query fails
-    /// - If writing to the file fails
-    /// - If reading file metadata fails
-    pub async fn backload(&mut self, conn: &Connection) -> Result<()> {
+    pub async fn restore(&mut self, conn: &Connection) -> Result<()> {
         let mut stmt = conn.prepare("SELECT content FROM dotconf WHERE path = ?1")?;
 
         let content: String = stmt
@@ -378,10 +368,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_backload() -> Result<()> {
+    async fn test_restore() -> Result<()> {
         let conn = setup_db().await?;
         let test_time = SystemTime::UNIX_EPOCH + Duration::from_secs(1630000000);
-        let test_path = std::env::temp_dir().join("test_backload");
+        let test_path = std::env::temp_dir().join("test_restore");
 
         // Ensure test file doesn't exist
         if test_path.exists() {
@@ -397,8 +387,8 @@ mod tests {
         let file_content = "file content".to_string();
         tokio::fs::write(&test_path, &file_content).await?;
 
-        // Backload should restore DB content to file
-        conf.backload(&conn).await?;
+        // Restore should restore DB content to file
+        conf.restore(&conn).await?;
 
         // Verify file content matches DB content
         let file_content = tokio::fs::read_to_string(&test_path).await?;

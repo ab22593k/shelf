@@ -12,15 +12,15 @@ use chrono::{DateTime, Utc};
 use clap::{CommandFactory, Parser};
 use clap_complete::{generate, Generator};
 use colored::*;
+use config::ShelfConfig;
 use dotconf::suggest::Suggestions;
 use dotconf::Dotconf;
-use gitai::config::remove_git_hook;
+use gitai::git::{git_diff, install_git_hook, remove_git_hook};
 use gitai::providers::create_provider;
-use gitai::{config::install_git_hook, git::git_diff};
 use rusqlite::Connection;
 use walkdir::WalkDir;
 
-use std::{io, path::PathBuf, time::SystemTime};
+use std::{io, time::SystemTime};
 
 fn print_completions<G: Generator>(gen: G, cmd: &mut clap::Command) {
     let bin_name = cmd.get_bin_name().unwrap_or("slf").to_string();
@@ -43,22 +43,14 @@ async fn init_db(conn: &Connection) -> Result<()> {
 async fn main() -> Result<()> {
     let cli = Shelf::parse();
 
-    let db_path = match std::env::var("XDG_CONFIG_HOME") {
-        Ok(path) => PathBuf::from(path),
-        Err(_) => PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".config"),
-    }
-    .join("shelf")
-    .join("dotconf.db");
+    let conf_path = ShelfConfig::dotconf_conf().get_path();
 
-    if let Some(parent) = db_path.parent() {
+    if let Some(parent) = conf_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
 
-    let conn = Connection::open(db_path.clone())?;
-    init_db(&conn).await?;
-
     // Ensure connection is properly initialized
-    let conn = Connection::open(db_path.clone())?;
+    let conn = Connection::open(conf_path.clone())?;
     init_db(&conn).await?;
 
     // Create prepared statements for common operations
@@ -70,10 +62,10 @@ async fn main() -> Result<()> {
     match cli.command {
         Commands::Dotconf { actions } => {
             match actions {
-                DotconfActions::List => {
-                    let conn = rusqlite::Connection::open(db_path)?;
+                DotconfActions::List { modified } => {
+                    let conn = rusqlite::Connection::open(conf_path)?;
 
-                    // Query all tracked files
+                    // Query all tr acked files
                     let mut stmt =
                         conn.prepare("SELECT path, content, last_modified FROM dotconf")?;
                     let files: Vec<_> = stmt
@@ -95,15 +87,36 @@ async fn main() -> Result<()> {
                     println!("{}", "=================".bright_black());
                     for file in files {
                         let (path, content, timestamp) = file;
-                        let modified = DateTime::<Utc>::from(
+
+                        // Check if file exists and get its last modified time
+                        let path_buf = std::path::PathBuf::from(&path);
+
+                        if modified {
+                            if let Ok(metadata) = std::fs::metadata(&path_buf) {
+                                if let Ok(modified) = metadata.modified() {
+                                    let file_timestamp = modified
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap()
+                                        .as_secs()
+                                        as i64;
+
+                                    // Skip if file hasn't been modified since last tracking
+                                    if file_timestamp <= timestamp {
+                                        continue;
+                                    }
+                                }
+                            }
+                        }
+
+                        let inserted = DateTime::<Utc>::from(
                             SystemTime::UNIX_EPOCH
                                 + std::time::Duration::from_secs(timestamp as u64),
                         );
                         println!("{}: {}", "Path".blue().bold(), path);
                         println!(
                             "{}: {}",
-                            "Modified".cyan().bold(),
-                            modified.format("%Y-%m-%d %H:%M:%S UTC")
+                            "Inserted".cyan().bold(),
+                            inserted.format("%Y-%m-%d %H:%M:%S UTC")
                         );
                         println!("{}: {} bytes", "Size".magenta().bold(), content.len());
                         println!("{}", "=================".bright_black());
@@ -111,7 +124,7 @@ async fn main() -> Result<()> {
                 }
 
                 DotconfActions::Remove { recursive, paths } => {
-                    let conn = Connection::open(&db_path)?;
+                    let conn = Connection::open(&conf_path)?;
                     for base_path in paths {
                         if recursive && base_path.is_dir() {
                             for entry in WalkDir::new(&base_path)
@@ -149,10 +162,10 @@ async fn main() -> Result<()> {
                 }
                 DotconfActions::Copy {
                     recursive,
-                    backload,
+                    restore,
                     paths,
                 } => {
-                    let conn = Connection::open(&db_path)?;
+                    let conn = Connection::open(&conf_path)?;
 
                     for base_path in paths {
                         if recursive && base_path.is_dir() {
@@ -163,10 +176,10 @@ async fn main() -> Result<()> {
                             {
                                 let path = entry.path();
                                 if path.is_file() {
-                                    if backload {
+                                    if restore {
                                         if let Ok(mut dotconf) = Dotconf::select(&conn, path).await
                                         {
-                                            dotconf.backload(&conn).await?;
+                                            dotconf.restore(&conn).await?;
                                             println!(
                                                 "{} {:?}",
                                                 "Successfully backloaded".green().bold(),
@@ -195,9 +208,9 @@ async fn main() -> Result<()> {
                                     }
                                 }
                             }
-                        } else if backload {
+                        } else if restore {
                             if let Ok(mut dotconf) = Dotconf::select(&conn, &base_path).await {
-                                dotconf.backload(&conn).await?;
+                                dotconf.restore(&conn).await?;
                                 println!(
                                     "{} {:?}",
                                     "Successfully backloaded".green().bold(),
@@ -227,7 +240,7 @@ async fn main() -> Result<()> {
                     }
                 }
                 DotconfActions::Suggest { interactive } => {
-                    let conn = Connection::open(&db_path)?;
+                    let conn = Connection::open(&conf_path)?;
                     let suggestions = Suggestions::default();
 
                     if interactive {
@@ -291,7 +304,7 @@ async fn main() -> Result<()> {
 
                 let provider = create_provider(&config)?;
 
-                let commit_msg = spinner::wrap_spinner(|| async {
+                let commit_msg = spinner::spinner_wrapper(|| async {
                     let diff = git_diff();
                     provider.generate_commit_message(&diff?).await
                 })

@@ -35,7 +35,10 @@ pub enum Commands {
 #[derive(Subcommand)]
 pub enum DotconfActions {
     #[command(name = "ls", about = "List all currently tracked dotconf files")]
-    List,
+    List {
+        #[arg(short, long, help = "List all modified dotconf files only")]
+        modified: bool,
+    },
 
     #[command(name = "rm", about = "Remove dotconf files from management")]
     Remove {
@@ -51,8 +54,10 @@ pub enum DotconfActions {
 
         #[arg(short, long)]
         recursive: bool,
-        #[arg(short, long)]
-        backload: bool,
+
+        /// When set to true, copies a dotconf file from the destination to the source location
+        #[arg(long)]
+        restore: bool,
     },
 
     #[command(about = "Suggest commonly used dotconf[s] cross diffrent OS's")]
