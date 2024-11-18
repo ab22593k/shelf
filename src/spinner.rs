@@ -3,7 +3,7 @@ use std::{future::Future, time::Duration};
 use anyhow::Result;
 use indicatif::{ProgressBar, ProgressStyle};
 
-pub async fn spinner_wrapper<F, Fut, T>(callback: F) -> Result<T>
+pub async fn new<F, Fut, T>(callback: F) -> Result<T>
 where
     F: FnOnce() -> Fut,
     Fut: Future<Output = Result<T>>,

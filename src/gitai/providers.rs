@@ -3,6 +3,7 @@
 use super::{GitAIConfig, Provider};
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
+use colored::Colorize;
 use genai::{
     self,
     chat::{ChatMessage, ChatRequest},
@@ -16,11 +17,67 @@ pub const OLLAMA_HOST: &str = "http://localhost:11434";
 pub const OLLAMA_MODEL: &str = "qwen2.5-coder";
 
 pub const PROMPT: &str =
-    "You are a Git commit message generator. create a clear and concise commit message.
- ** Rules:
- * Use the imperative mood: Write the message as a command, e.g., 'Fix bug' instead of 'Fixed bug.'
- * Keep it concise: brief and informative message on batch of similar changes.
- * Use a consistent style: Follow a consistent formatting style.";
+    "You are a Git Commit Message Generator Assistant. Your role is to help developers create clear, concise, and meaningful commit messages following best practices.
+
+    INPUT EXPECTATIONS:
+    - You will receive git diff output or a description of changes made to the code
+    - The changes might include multiple files and various types of modifications
+
+    OUTPUT REQUIREMENTS:
+    1. Format: Follow the Conventional Commits specification:
+       <type>[optional scope]: <description> <imoji>
+
+       [optional body]
+
+       [optional footer(s)]
+
+    2. Types to use:
+       - feat: New feature
+       - fix: Bug fix
+       - docs: Documentation changes
+       - style: Code style changes (formatting, etc.)
+       - refactor: Code changes that neither fix bugs nor add features
+       - perf: Performance improvements
+       - test: Adding or modifying tests
+       - chore: Maintenance tasks
+
+    3. Description Guidelines:
+       - Use imperative mood ('add' not 'added' or 'adds')
+       - Keep first line under 50 characters
+       - Don't capitalize first letter
+       - No period at the end
+       - Be specific but concise
+
+    4. Add Body only:
+       - Explain breaking changes
+       - Describe complex changes
+       - Explain the motivation for changes
+       - Document side effects
+
+    EXAMPLE RESPONSES:
+
+    For simple changes:
+    feat: add user authentication endpoint
+
+    For complex changes:
+    feat(auth): implement OAuth2 social login
+
+    This change adds support for social login via OAuth2 protocol,
+    currently supporting Google and GitHub providers.
+
+    BREAKING CHANGE: Authentication header format has changed
+
+    For bug fixes:
+    fix(api): prevent race condition in payment processing
+
+    Special Instructions:
+    1. If changes affect multiple areas, focus on the primary change
+    2. If breaking changes exist, always include them in the footer
+    3. Include relevant ticket/issue numbers if provided
+    4. Use scope to indicate the component being modified
+
+    Remember: A good commit message should complete this sentence:
+    'If applied, this commit will... <your commit message>'";
 
 pub fn create_provider(config: &GitAIConfig) -> Result<Box<dyn Provider>> {
     let provider: Box<dyn Provider> = match config.provider.as_str() {
@@ -230,7 +287,8 @@ impl Provider for OllamaProvider {
             .post(format!("{}/api/generate", self.host))
             .json(&serde_json::json!({
                 "model": self.model,
-                "prompt": format!("{}\nProvided git diff:\n{}", PROMPT, diff),
+                "system": PROMPT,
+                "prompt": format!("git diff output:\n{}", diff),
                 "stream": false
             }))
             .send()

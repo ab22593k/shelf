@@ -56,7 +56,7 @@ async fn handle_commit(args: &Args) -> Result<()> {
     let config = GitAIConfig::load().await?;
     let provider = create_provider(&config)?;
 
-    let mut commit_msg = spinner::spinner_wrapper(|| async {
+    let mut commit_msg = spinner::new(|| async {
         let diff = git_diff();
         provider.generate_commit_message(&diff?).await
     })

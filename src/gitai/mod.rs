@@ -1,7 +1,7 @@
 pub mod git;
 pub mod providers;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use providers::{OLLAMA_HOST, OLLAMA_MODEL};
 use serde::{Deserialize, Serialize};
@@ -43,7 +43,7 @@ impl GitAIConfig {
             "ollama_model" => self.ollama_model = Some(value.to_string()),
             "assistant_thread_id" => self.assistant_thread_id = Some(value.to_string()),
             "project_context" => self.project_context = Some(value.to_string()),
-            _ => return Err(anyhow::anyhow!("Unknown config key: {}", key)),
+            _ => return Err(anyhow!("Unknown config key: {}", key)),
         }
         Ok(())
     }

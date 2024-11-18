@@ -22,9 +22,11 @@ use walkdir::WalkDir;
 
 use std::{io, time::SystemTime};
 
-fn print_completions<G: Generator>(gen: G, cmd: &mut clap::Command) {
+fn print_completions<G: Generator>(gen: G, cmd: &mut clap::Command) -> Result<()> {
     let bin_name = cmd.get_bin_name().unwrap_or("slf").to_string();
     generate::<G, _>(gen, cmd, bin_name, &mut io::stdout());
+
+    Ok(())
 }
 
 async fn init_db(conn: &Connection) -> Result<()> {
@@ -42,9 +44,7 @@ async fn init_db(conn: &Connection) -> Result<()> {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Shelf::parse();
-
     let conf_path = ShelfConfig::dotconf_conf().get_path();
-
     if let Some(parent) = conf_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -82,9 +82,9 @@ async fn main() -> Result<()> {
                         println!("{}", "No tracked dotconf[s] found.".yellow());
                         return Ok(());
                     }
-
                     println!("{}", "Tracked dotconf[s]:".green().bold());
                     println!("{}", "=================".bright_black());
+
                     for file in files {
                         let (path, content, timestamp) = file;
 
@@ -152,7 +152,7 @@ async fn main() -> Result<()> {
                                 dotconf.get_path().display()
                             );
                         } else {
-                            println!(
+                            eprintln!(
                                 "{} No such dotconf found: {:?}",
                                 "Error:".red().bold(),
                                 base_path
@@ -182,7 +182,7 @@ async fn main() -> Result<()> {
                                             dotconf.restore(&conn).await?;
                                             println!(
                                                 "{} {:?}",
-                                                "Successfully backloaded".green().bold(),
+                                                "Successfully restored".green().bold(),
                                                 path
                                             );
                                         }
@@ -213,7 +213,7 @@ async fn main() -> Result<()> {
                                 dotconf.restore(&conn).await?;
                                 println!(
                                     "{} {:?}",
-                                    "Successfully backloaded".green().bold(),
+                                    "Successfully restored".green().bold(),
                                     base_path
                                 );
                             }
@@ -228,7 +228,7 @@ async fn main() -> Result<()> {
                                     );
                                 }
                                 Err(e) => {
-                                    println!(
+                                    eprintln!(
                                         "{} {:?}: {}",
                                         "Failed to copy".red().bold(),
                                         base_path,
@@ -249,25 +249,24 @@ async fn main() -> Result<()> {
                                 for path in selected {
                                     let expanded_path = shellexpand::tilde(&path).to_string();
                                     match Dotconf::from_file(expanded_path).await {
-                                        Ok(mut dotconf) => {
-                                            if let Err(e) = dotconf.insert(&conn).await {
-                                                println!(
-                                                    "{} {}: {}",
-                                                    "Failed".red().bold(),
-                                                    path,
-                                                    e
-                                                );
-                                            } else {
-                                                println!("{} {}", "Added".green().bold(), path);
+                                        Ok(mut dotconf) => match dotconf.insert(&conn).await {
+                                            Ok(_) => {
+                                                println!("{} {}", "Added".green().bold(), path)
                                             }
-                                        }
+                                            Err(e) => eprintln!(
+                                                "{} {}: {}",
+                                                "Failed".red().bold(),
+                                                path,
+                                                e
+                                            ),
+                                        },
                                         Err(e) => {
-                                            println!("{} {}: {}", "Error".red().bold(), path, e)
+                                            eprintln!("{} {}: {}", "Error".red().bold(), path, e)
                                         }
                                     }
                                 }
                             }
-                            Err(e) => println!("{} {}", "Selection failed:".red().bold(), e),
+                            Err(e) => eprintln!("{} {}", "Selection failed:".red().bold(), e),
                         }
                     } else {
                         suggestions.print_suggestions();
@@ -286,15 +285,11 @@ async fn main() -> Result<()> {
                 let hooks_dir = git_dir.join("hooks");
 
                 if install {
-                    install_git_hook(&hooks_dir)?;
-                    println!("{}", "Git hook installed successfully.".green());
-                    return Ok(());
+                    return install_git_hook(&hooks_dir);
                 }
 
                 if uninstall {
-                    remove_git_hook(&hooks_dir)?;
-                    println!("{}", "Git hook removed successfully.".green());
-                    return Ok(());
+                    return remove_git_hook(&hooks_dir);
                 }
 
                 let mut config = GitAIConfig::load().await?;
@@ -304,13 +299,12 @@ async fn main() -> Result<()> {
 
                 let provider = create_provider(&config)?;
 
-                let commit_msg = spinner::spinner_wrapper(|| async {
+                let commit_msg = spinner::new(|| async {
                     let diff = git_diff();
                     provider.generate_commit_message(&diff?).await
                 })
                 .await?;
 
-                let commit_msg = commit_msg.to_string();
                 println!(
                     "{}\n{}",
                     "Generated commit message:".green().bold(),
@@ -341,12 +335,7 @@ async fn main() -> Result<()> {
                 }
             },
         },
-        Commands::Completion { shell } => {
-            let mut cmd = Shelf::command();
-            print_completions(shell, &mut cmd);
-
-            return Ok(());
-        }
+        Commands::Completion { shell } => print_completions(shell, &mut Shelf::command())?,
     }
     Ok(())
 }

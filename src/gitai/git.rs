@@ -1,5 +1,6 @@
 use anyhow::Result;
-use std::process::Command;
+use colored::Colorize;
+use std::{path::Path, process::Command};
 
 pub fn git_diff() -> Result<String> {
     let output = Command::new("git")
@@ -11,11 +12,10 @@ pub fn git_diff() -> Result<String> {
         .expect("failed to execute process");
 
     let stdout = String::from_utf8(output.stdout)?;
-
     Ok(stdout)
 }
 
-pub fn install_git_hook(hooks_dir: &std::path::Path) -> Result<()> {
+pub fn install_git_hook(hooks_dir: &Path) -> Result<()> {
     std::fs::create_dir_all(hooks_dir)?;
     let hook_path = hooks_dir.join("prepare-commit-msg");
     let current_exe = std::env::current_exe()?;
@@ -43,13 +43,16 @@ exec {} "$@""#,
         std::fs::set_permissions(&hook_path, perms)?;
     }
 
+    println!("{}", "Git hook installed successfully.".green());
     Ok(())
 }
 
-pub fn remove_git_hook(hooks_dir: &std::path::Path) -> Result<()> {
+pub fn remove_git_hook(hooks_dir: &Path) -> Result<()> {
     let hook_path = hooks_dir.join("prepare-commit-msg");
     if hook_path.exists() {
         std::fs::remove_file(hook_path)?;
     }
+
+    println!("{}", "Git hook removed successfully.".green());
     Ok(())
 }
