@@ -16,7 +16,7 @@ use serde_json;
 pub const OLLAMA_HOST: &str = "http://localhost:11434";
 pub const OLLAMA_MODEL: &str = "qwen2.5-coder";
 
-pub const PROMPT: &str =
+pub const SYSTEM_PROMPT: &str =
     "You are a Git Commit Message Generator Assistant. Your role is to help developers create clear, concise, and meaningful commit messages following best practices.
 
     INPUT EXPECTATIONS:
@@ -135,9 +135,9 @@ impl OpenAIProvider {
 #[async_trait]
 impl Provider for OpenAIProvider {
     async fn generate_commit_message(&self, diff: &str) -> Result<String> {
-        let prompt = format!("{}\n\n{}", PROMPT, diff);
-
-        let chat_request = ChatRequest::default().append_message(ChatMessage::user(&prompt));
+        let chat_request = ChatRequest::default()
+            .append_message(ChatMessage::system(SYSTEM_PROMPT))
+            .append_message(ChatMessage::user(self.prompt(diff)));
 
         let response = self
             .client
@@ -151,10 +151,6 @@ impl Provider for OpenAIProvider {
             .unwrap()
             .trim()
             .to_string())
-    }
-
-    fn name(&self) -> &'static str {
-        "openai"
     }
 }
 
@@ -182,9 +178,9 @@ impl AnthropicProvider {
 #[async_trait]
 impl Provider for AnthropicProvider {
     async fn generate_commit_message(&self, diff: &str) -> Result<String> {
-        let prompt = format!("{}\n\n{}", PROMPT, diff);
-
-        let chat_request = ChatRequest::default().append_message(ChatMessage::user(&prompt));
+        let chat_request = ChatRequest::default()
+            .append_message(ChatMessage::system(SYSTEM_PROMPT))
+            .append_message(ChatMessage::user(self.prompt(diff)));
 
         let response = self
             .client
@@ -198,10 +194,6 @@ impl Provider for AnthropicProvider {
             .unwrap()
             .trim()
             .to_string())
-    }
-
-    fn name(&self) -> &'static str {
-        "anthropic"
     }
 }
 
@@ -229,9 +221,9 @@ impl GeminiProvider {
 #[async_trait]
 impl Provider for GeminiProvider {
     async fn generate_commit_message(&self, diff: &str) -> Result<String> {
-        let prompt = format!("{}\n\n{}", PROMPT, diff);
-
-        let chat_request = ChatRequest::default().append_message(ChatMessage::user(&prompt));
+        let chat_request = ChatRequest::default()
+            .append_message(ChatMessage::system(SYSTEM_PROMPT))
+            .append_message(ChatMessage::user(self.prompt(diff)));
 
         let response = self
             .client
@@ -245,10 +237,6 @@ impl Provider for GeminiProvider {
             .unwrap()
             .trim()
             .to_string())
-    }
-
-    fn name(&self) -> &'static str {
-        "gemini"
     }
 }
 
@@ -287,8 +275,8 @@ impl Provider for OllamaProvider {
             .post(format!("{}/api/generate", self.host))
             .json(&serde_json::json!({
                 "model": self.model,
-                "system": PROMPT,
-                "prompt": format!("git diff output:\n{}", diff),
+                "system": SYSTEM_PROMPT,
+                "prompt": self.prompt(diff),
                 "stream": false
             }))
             .send()
@@ -300,9 +288,5 @@ impl Provider for OllamaProvider {
             .ok_or_else(|| anyhow!("Invalid response from Ollama"))?
             .trim()
             .to_string())
-    }
-
-    fn name(&self) -> &'static str {
-        "ollama"
     }
 }

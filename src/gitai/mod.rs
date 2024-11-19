@@ -12,8 +12,12 @@ use crate::config::ShelfConfig;
 pub trait Provider: Send + Sync {
     async fn generate_commit_message(&self, diff: &str) -> Result<String>;
 
-    #[allow(unused)]
-    fn name(&self) -> &'static str;
+    fn prompt(&self, diff: &str) -> String {
+        format!(
+            "Generate a concise commit message for the following diff:\n{}",
+            diff
+        )
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -24,8 +28,6 @@ pub struct GitAIConfig {
     pub gemini_api_key: Option<String>,
     pub ollama_host: Option<String>,
     pub ollama_model: Option<String>,
-    pub assistant_thread_id: Option<String>,
-    pub project_context: Option<String>,
 }
 
 impl GitAIConfig {
@@ -41,8 +43,6 @@ impl GitAIConfig {
             "gemini_api_key" => self.gemini_api_key = Some(value.to_string()),
             "ollama_host" => self.ollama_host = Some(value.to_string()),
             "ollama_model" => self.ollama_model = Some(value.to_string()),
-            "assistant_thread_id" => self.assistant_thread_id = Some(value.to_string()),
-            "project_context" => self.project_context = Some(value.to_string()),
             _ => return Err(anyhow!("Unknown config key: {}", key)),
         }
         Ok(())
@@ -56,8 +56,6 @@ impl GitAIConfig {
             "gemini_api_key" => self.gemini_api_key.clone(),
             "ollama_host" => self.ollama_host.clone(),
             "ollama_model" => self.ollama_model.clone(),
-            "assistant_thread_id" => self.assistant_thread_id.clone(),
-            "project_context" => self.project_context.clone(),
             _ => None,
         }
     }
@@ -84,12 +82,6 @@ impl GitAIConfig {
         if let Some(model) = &self.ollama_model {
             items.push(("ollama_model", model.clone()));
         }
-        if let Some(id) = &self.assistant_thread_id {
-            items.push(("assistant_thread_id", id.clone()));
-        }
-        if let Some(ctx) = &self.project_context {
-            items.push(("project_context", ctx.clone()));
-        }
 
         items
     }
@@ -104,8 +96,6 @@ impl Default for GitAIConfig {
             gemini_api_key: None,
             ollama_host: Some(OLLAMA_HOST.to_string()),
             ollama_model: Some(OLLAMA_MODEL.to_string()),
-            assistant_thread_id: None,
-            project_context: None,
         }
     }
 }
