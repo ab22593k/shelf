@@ -1,7 +1,7 @@
 [package]
 name = "shlf"
 description = "AI-based command-line tools for developers"
-version = "0.8.5"
+version = "0.8.6"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/ab22593k/shelf"
@@ -19,25 +19,25 @@ path = "src/bin/hook.rs"
 
 [dependencies]
 git2 = "0.19"
-tokio = { version = "1.40.0", features = ["full"] }
-serde = { version = "1.0.210", features = ["derive"] }
-clap = { version = "4.5.17", features = ["derive", "cargo"] }
-anyhow = "1.0.89"
+tokio = { version = "1.41.1", features = ["full"] }
+serde = { version = "1.0.215", features = ["derive"] }
+clap = { version = "4.5.21", features = ["derive", "cargo"] }
+anyhow = "1.0.93"
 dialoguer = "0.11.0"
 shellexpand = "3.1.0"
-clap_complete = "4.5.29"
+clap_complete = "4.5.38"
 colored = "2.1.0"
 directories = "5.0.1"
 home = "0.5.9"
 rusqlite = "0.32.1"
 chrono = "0.4.38"
 walkdir = "2.5.0"
-genai = "0.1.11"
+genai = "0.1.12"
 async-trait = "0.1.83"
-serde_json = "1.0.132"
+serde_json = "1.0.133"
 reqwest = "0.12.9"
-tempfile = "3.13.0"
-indicatif = "0.17.8"
+tempfile = "3.14.0"
+indicatif = "0.17.9"
 
 [profile.release]
 opt-level = 3

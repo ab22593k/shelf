@@ -2,11 +2,10 @@
 
 [![Shelf CI](https://github.com/ab22593k/shelf/actions/workflows/ci.yml/badge.svg)](https://github.com/ab22593k/shelf/actions/workflows/ci.yml)
 
-Shelf is a command-line tool for managing dotconf files and generating git
-commit messages using AI. It provides a simple interface to track dotfiles
-across your system and integrates with multiple AI providers to automatically
-generate meaningful commit messages through git hooks. With support for local
-and cloud-based AI models, Shelf makes both dotfile management and git commits effortless.
+Shelf is a command-line tool for managing dotconf files and generating git commit messages
+using AI. It provides a simple interface to track dotfiles across your system and integrates
+with multiple AI providers to automatically generate meaningful commit messages through git hooks.
+With support for local and cloud-based AI models, Shelf makes both dotfile management and git commits effortless.
 
 ## Features
 
@@ -14,10 +13,11 @@ and cloud-based AI models, Shelf makes both dotfile management and git commits e
 - List all tracked dotfiles
 - Remove dotconf files recursively from database
 - AI-powered git commit message generation with multiple providers:
-  - Ollama (default, local)
-  - OpenAI
-  - Anthropic Claude
+  - Groq
   - Google Gemini
+  - Anthropic Claude
+  - OpenAI
+  - Ollama (local)
 - Git hooks integration for automatic commit message generation
 
 ## Installation
@@ -63,10 +63,10 @@ The `gitai` subcommand provides AI-powered git commit message generation:
 slf gitai commit
 
 # Install git hook for automatic message generation
-slf gitai commit --install
+slf gitai commit --install-hook
 
 # Remove git hook
-slf gitai commit --uninstall
+slf gitai commit --uninstal-hook
 
 # Configure AI provider
 slf gitai config set provider openai
@@ -80,10 +80,11 @@ slf gitai config list
 ```
 
 The GitAI features support multiple AI providers:
-- **Ollama** (default): Local, privacy-friendly AI using models like Qwen
+- **Groq** (default): GroqCloud-based models
+- **Google Gemini**: Cloud-based using Gemini models
 - **OpenAI**: Cloud-based using GPT models
 - **Anthropic Claude**: Cloud-based using Claude models
-- **Google Gemini**: Cloud-based using Gemini models
+- **Ollama**: Local, privacy-friendly AI using models like Qwen
 
 The git hook integrates seamlessly with your normal git workflow:
 ```bash
@@ -130,11 +131,10 @@ After setting up the completion script, restart your shell or source the respect
 
 GitAI settings are stored in `~/.config/shelf/gitai.json` (or `$XDG_CONFIG_HOME/shelf/gitai.json` if set). You can configure:
 
-- `provider`: AI provider to use (`ollama`, `openai`, `anthropic`, `gemini`)
+- `provider`: AI provider to use (`ollama`, `openai`, `anthropic`, `gemini`, `groq`)
 - `ollama_host`: Ollama server URL (default: `http://localhost:11434`)
 - `ollama_model`: Ollama model to use (default: `qwen2.5-coder`)
 - `openai_api_key`: OpenAI API key for GPT models
-- `project_context`: Optional project-specific context for better commits
 
 Example configuration:
 ```json
@@ -142,7 +142,6 @@ Example configuration:
   "provider": "ollama",
   "ollama_host": "http://localhost:11434",
   "ollama_model": "qwen2.5-coder",
-  "project_context": "AI-Powered tools for developers"
 }
 ```
 ## Development

@@ -1,12 +1,9 @@
-#![allow(unused)]
-
 use super::{GitAIConfig, Provider};
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
-use colored::Colorize;
 use genai::{
     self,
-    chat::{ChatMessage, ChatRequest},
+    chat::{ChatMessage, ChatOptions, ChatRequest},
     resolver::{AuthData, AuthResolver},
     Client, ModelIden,
 };
@@ -25,7 +22,7 @@ pub const SYSTEM_PROMPT: &str =
 
     OUTPUT REQUIREMENTS:
     1. Format: Follow the Conventional Commits specification:
-       <type>[optional scope]: <description> <imoji>
+       <type>[optional scope]: <description> <random imoji>
 
        [optional body]
 
@@ -101,6 +98,13 @@ pub fn create_provider(config: &GitAIConfig) -> Result<Box<dyn Provider>> {
                 .as_ref()
                 .ok_or_else(|| anyhow!("Google Gemini API key not configured"))?;
             Box::new(GeminiProvider::new(api_key))
+        }
+        "groq" => {
+            let api_key = config
+                .groq_api_key
+                .as_ref()
+                .ok_or_else(|| anyhow!("Groq API key not configured"))?;
+            Box::new(GroqProvider::new(api_key))
         }
         "ollama" => Box::new(OllamaProvider::with_config(
             config.ollama_host.clone(),
@@ -213,7 +217,7 @@ impl GeminiProvider {
 
         Self {
             client: Client::builder().with_auth_resolver(auth_resolver).build(),
-            model: "gemini-1.5-flash".to_string(),
+            model: "gemini-1.5-pro".to_string(),
         }
     }
 }
@@ -225,9 +229,12 @@ impl Provider for GeminiProvider {
             .append_message(ChatMessage::system(SYSTEM_PROMPT))
             .append_message(ChatMessage::user(self.prompt(diff)));
 
+        let options = ChatOptions::default()
+            .with_temperature(0.95)
+            .with_top_p(0.6);
         let response = self
             .client
-            .exec_chat(&self.model, chat_request, None)
+            .exec_chat(&self.model, chat_request, Some(&options))
             .await?;
 
         Ok(response
@@ -240,6 +247,50 @@ impl Provider for GeminiProvider {
     }
 }
 
+pub struct GroqProvider {
+    client: Client,
+    model: String,
+}
+
+impl GroqProvider {
+    pub fn new(api_key: &str) -> Self {
+        let api_key = api_key.to_string();
+        let auth_resolver = AuthResolver::from_resolver_fn(
+            move |_model_iden: ModelIden| -> Result<Option<AuthData>, genai::resolver::Error> {
+                Ok(Some(AuthData::from_single(api_key.clone())))
+            },
+        );
+
+        Self {
+            client: Client::builder().with_auth_resolver(auth_resolver).build(),
+            model: "llama-3.1-70b-versatile".to_string(),
+        }
+    }
+}
+
+#[async_trait]
+impl Provider for GroqProvider {
+    async fn generate_commit_message(&self, diff: &str) -> Result<String> {
+        let chat_request = ChatRequest::default()
+            .append_message(ChatMessage::system(SYSTEM_PROMPT))
+            .append_message(ChatMessage::user(self.prompt(diff)));
+
+        let options = ChatOptions::default()
+            .with_temperature(0.95)
+            .with_top_p(0.6);
+        let response = self
+            .client
+            .exec_chat(&self.model, chat_request, Some(&options))
+            .await?;
+
+        Ok(response
+            .content_text_as_str()
+            .unwrap_or_default()
+            .trim()
+            .to_string())
+    }
+}
+
 pub struct OllamaProvider {
     host: String,
     model: String,
@@ -247,18 +298,14 @@ pub struct OllamaProvider {
 
 impl Default for OllamaProvider {
     fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl OllamaProvider {
-    pub fn new() -> Self {
         Self {
             host: OLLAMA_HOST.to_string(),
             model: OLLAMA_MODEL.to_string(),
         }
     }
+}
 
+impl OllamaProvider {
     pub fn with_config(host: Option<String>, model: Option<String>) -> Self {
         Self {
             host: host.unwrap_or_else(|| OLLAMA_HOST.to_string()),
@@ -277,7 +324,9 @@ impl Provider for OllamaProvider {
                 "model": self.model,
                 "system": SYSTEM_PROMPT,
                 "prompt": self.prompt(diff),
-                "stream": false
+                "stream": false,
+                "temperature": 0.3,
+                "top_p": 0.1
             }))
             .send()
             .await?;

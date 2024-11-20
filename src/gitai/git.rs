@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use colored::Colorize;
 use std::{path::Path, process::Command};
 
@@ -23,7 +23,7 @@ pub fn install_git_hook(hooks_dir: &Path) -> Result<()> {
     // Get the hook binary path relative to the current executable
     let hook_binary = current_exe
         .parent()
-        .ok_or_else(|| anyhow::anyhow!("Cannot determine executable directory"))?
+        .ok_or_else(|| anyhow!("Cannot determine executable directory"))?
         .join("gitai-hook");
 
     let hook_content = format!(

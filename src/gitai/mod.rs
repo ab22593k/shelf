@@ -14,7 +14,7 @@ pub trait Provider: Send + Sync {
 
     fn prompt(&self, diff: &str) -> String {
         format!(
-            "Generate a concise commit message for the following diff:\n{}",
+            "Generate a concise commit message for the following git diff output:\n{}",
             diff
         )
     }
@@ -26,6 +26,7 @@ pub struct GitAIConfig {
     pub openai_api_key: Option<String>,
     pub anthropic_api_key: Option<String>,
     pub gemini_api_key: Option<String>,
+    pub groq_api_key: Option<String>,
     pub ollama_host: Option<String>,
     pub ollama_model: Option<String>,
 }
@@ -41,6 +42,7 @@ impl GitAIConfig {
             "openai_api_key" => self.openai_api_key = Some(value.to_string()),
             "anthropic_api_key" => self.anthropic_api_key = Some(value.to_string()),
             "gemini_api_key" => self.gemini_api_key = Some(value.to_string()),
+            "groq_api_key" => self.groq_api_key = Some(value.to_string()),
             "ollama_host" => self.ollama_host = Some(value.to_string()),
             "ollama_model" => self.ollama_model = Some(value.to_string()),
             _ => return Err(anyhow!("Unknown config key: {}", key)),
@@ -54,6 +56,7 @@ impl GitAIConfig {
             "openai_api_key" => self.openai_api_key.clone(),
             "anthropic_api_key" => self.anthropic_api_key.clone(),
             "gemini_api_key" => self.gemini_api_key.clone(),
+            "groq_api_key" => self.groq_api_key.clone(),
             "ollama_host" => self.ollama_host.clone(),
             "ollama_model" => self.ollama_model.clone(),
             _ => None,
@@ -76,6 +79,9 @@ impl GitAIConfig {
         if let Some(key) = &self.gemini_api_key {
             items.push(("gemini_api_key", key.clone()));
         }
+        if let Some(key) = &self.groq_api_key {
+            items.push(("groq_api_key", key.clone()));
+        }
         if let Some(host) = &self.ollama_host {
             items.push(("ollama_host", host.clone()));
         }
@@ -90,10 +96,11 @@ impl GitAIConfig {
 impl Default for GitAIConfig {
     fn default() -> Self {
         Self {
-            provider: "ollama".to_string(),
+            provider: "groq".to_string(),
             openai_api_key: None,
             anthropic_api_key: None,
             gemini_api_key: None,
+            groq_api_key: None,
             ollama_host: Some(OLLAMA_HOST.to_string()),
             ollama_model: Some(OLLAMA_MODEL.to_string()),
         }

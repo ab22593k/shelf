@@ -77,9 +77,9 @@ pub enum GitAIActions {
         #[arg(short, long, help = "Override the configured AI provider")]
         provider: Option<String>,
         #[arg(long, help = "Install the prepare-commit-msg hook")]
-        install: bool,
-        #[arg(long, help = "Remove the prepare-commit-msg hook")]
-        uninstall: bool,
+        install_hook: bool,
+        #[arg(long, help = "Uninstall the prepare-commit-msg hook")]
+        uninstall_hook: bool,
     },
 
     #[command(name = "config", about = "Configure GitAI settings")]
