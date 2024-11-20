@@ -277,18 +277,18 @@ async fn main() -> Result<()> {
         Commands::Gitai { actions } => match actions {
             GitAIActions::Commit {
                 provider: provider_override,
-                install,
-                uninstall,
+                install_hook,
+                uninstall_hook,
             } => {
                 let repo = git2::Repository::open_from_env()?;
                 let git_dir = repo.path();
                 let hooks_dir = git_dir.join("hooks");
 
-                if install {
+                if install_hook {
                     return install_git_hook(&hooks_dir);
                 }
 
-                if uninstall {
+                if uninstall_hook {
                     return remove_git_hook(&hooks_dir);
                 }
 
