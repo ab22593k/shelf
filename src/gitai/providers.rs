@@ -10,7 +10,10 @@ use genai::{
 use reqwest;
 use serde_json;
 
-pub const OLLAMA_HOST: &str = "http://localhost:11434";
+pub const XAI_HOST: &str = "https://api.x.ai/v1/chat/completions";
+pub const XAI_MODEL: &str = "grok-beta";
+
+pub const OLLAMA_HOST: &str = "http://localhost:11434/api/generate";
 pub const OLLAMA_MODEL: &str = "qwen2.5-coder";
 
 pub const SYSTEM_PROMPT: &str =
@@ -26,7 +29,7 @@ pub const SYSTEM_PROMPT: &str =
 
        [optional body]
 
-       [optional footer(s)]
+       [optional footer]
 
     2. Types to use:
        - feat: New feature
@@ -104,6 +107,13 @@ pub fn create_provider(config: &GitAIConfig) -> Result<Box<dyn Provider>> {
                 .groq_api_key
                 .as_ref()
                 .ok_or_else(|| anyhow!("Groq API key not configured"))?;
+            Box::new(GroqProvider::new(api_key))
+        }
+        "xai" => {
+            let api_key = config
+                .groq_api_key
+                .as_ref()
+                .ok_or_else(|| anyhow!("XAI API key not configured"))?;
             Box::new(GroqProvider::new(api_key))
         }
         "ollama" => Box::new(OllamaProvider::with_config(
@@ -291,6 +301,46 @@ impl Provider for GroqProvider {
     }
 }
 
+pub struct XAIProvider {
+    host: String,
+    model: String,
+}
+
+impl Default for XAIProvider {
+    fn default() -> Self {
+        Self {
+            host: XAI_HOST.to_string(),
+            model: XAI_MODEL.to_string(),
+        }
+    }
+}
+
+#[async_trait]
+impl Provider for XAIProvider {
+    async fn generate_commit_message(&self, diff: &str) -> Result<String> {
+        let client = reqwest::Client::new();
+        let request = client
+            .post(self.host.to_string())
+            .json(&serde_json::json!({
+                "model": self.model,
+                "system": SYSTEM_PROMPT,
+                "prompt": self.prompt(diff),
+                "stream": false,
+                "temperature": 0.3,
+                "top_p": 0.1
+            }))
+            .send()
+            .await?;
+
+        let response_json: serde_json::Value = serde_json::from_str(&request.text().await?)?;
+        Ok(response_json["response"]
+            .as_str()
+            .ok_or_else(|| anyhow!("Invalid response from XAI"))?
+            .trim()
+            .to_string())
+    }
+}
+
 pub struct OllamaProvider {
     host: String,
     model: String,
@@ -319,7 +369,7 @@ impl Provider for OllamaProvider {
     async fn generate_commit_message(&self, diff: &str) -> Result<String> {
         let client = reqwest::Client::new();
         let request = client
-            .post(format!("{}/api/generate", self.host))
+            .post(self.host.to_string())
             .json(&serde_json::json!({
                 "model": self.model,
                 "system": SYSTEM_PROMPT,

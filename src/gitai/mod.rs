@@ -27,6 +27,7 @@ pub struct GitAIConfig {
     pub anthropic_api_key: Option<String>,
     pub gemini_api_key: Option<String>,
     pub groq_api_key: Option<String>,
+    pub xai_api_key: Option<String>,
     pub ollama_host: Option<String>,
     pub ollama_model: Option<String>,
 }
@@ -43,6 +44,7 @@ impl GitAIConfig {
             "anthropic_api_key" => self.anthropic_api_key = Some(value.to_string()),
             "gemini_api_key" => self.gemini_api_key = Some(value.to_string()),
             "groq_api_key" => self.groq_api_key = Some(value.to_string()),
+            "xai_api_key" => self.xai_api_key = Some(value.to_string()),
             "ollama_host" => self.ollama_host = Some(value.to_string()),
             "ollama_model" => self.ollama_model = Some(value.to_string()),
             _ => return Err(anyhow!("Unknown config key: {}", key)),
@@ -57,6 +59,7 @@ impl GitAIConfig {
             "anthropic_api_key" => self.anthropic_api_key.clone(),
             "gemini_api_key" => self.gemini_api_key.clone(),
             "groq_api_key" => self.groq_api_key.clone(),
+            "xai_api_key" => self.xai_api_key.clone(),
             "ollama_host" => self.ollama_host.clone(),
             "ollama_model" => self.ollama_model.clone(),
             _ => None,
@@ -82,6 +85,9 @@ impl GitAIConfig {
         if let Some(key) = &self.groq_api_key {
             items.push(("groq_api_key", key.clone()));
         }
+        if let Some(host) = &self.xai_api_key {
+            items.push(("xai_api_key", host.clone()));
+        }
         if let Some(host) = &self.ollama_host {
             items.push(("ollama_host", host.clone()));
         }
@@ -101,6 +107,7 @@ impl Default for GitAIConfig {
             anthropic_api_key: None,
             gemini_api_key: None,
             groq_api_key: None,
+            xai_api_key: None,
             ollama_host: Some(OLLAMA_HOST.to_string()),
             ollama_model: Some(OLLAMA_MODEL.to_string()),
         }

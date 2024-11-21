@@ -1,4 +1,4 @@
-# Shelf: AI-Powered tools for developers
+# Shelf: AI-based command-line tools for developers
 
 [![Shelf CI](https://github.com/ab22593k/shelf/actions/workflows/ci.yml/badge.svg)](https://github.com/ab22593k/shelf/actions/workflows/ci.yml)
 
@@ -17,6 +17,7 @@ With support for local and cloud-based AI models, Shelf makes both dotfile manag
   - Google Gemini
   - Anthropic Claude
   - OpenAI
+  - XAI grok
   - Ollama (local)
 - Git hooks integration for automatic commit message generation
 
@@ -84,6 +85,7 @@ The GitAI features support multiple AI providers:
 - **Google Gemini**: Cloud-based using Gemini models
 - **OpenAI**: Cloud-based using GPT models
 - **Anthropic Claude**: Cloud-based using Claude models
+- **XAI Grok**: Cloud-based using Grok models
 - **Ollama**: Local, privacy-friendly AI using models like Qwen
 
 The git hook integrates seamlessly with your normal git workflow:
