@@ -1,4 +1,4 @@
-//! Manages and suggests common configuration files (dotconf) files.
+//! Manages and suggests common configuration files files.
 
 use anyhow::Result;
 

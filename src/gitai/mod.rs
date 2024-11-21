@@ -1,5 +1,5 @@
-pub mod git;
 pub mod providers;
+pub mod utils;
 
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
@@ -99,6 +99,7 @@ impl GitAIConfig {
     }
 }
 
+/// This is defaul implementation for gitaiconfig
 impl Default for GitAIConfig {
     fn default() -> Self {
         Self {

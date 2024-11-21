@@ -1,3 +1,6 @@
+//! This module provides a struct for managing dotconf files, including saving and restoring
+//! them from a database.
+
 pub mod suggest;
 
 use anyhow::{anyhow, Result};
@@ -8,6 +11,7 @@ use std::{
     time::SystemTime,
 };
 
+/// Represents a dotconf file and its metadata.
 #[derive(Debug, Clone)]
 pub struct Dotconf {
     path: PathBuf,

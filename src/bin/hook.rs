@@ -7,12 +7,12 @@
 use anyhow::{anyhow, Result};
 use clap::Parser;
 use colored::*;
-use slf::gitai::git::git_diff;
-use slf::gitai::providers::create_provider;
-use slf::gitai::GitAIConfig;
-use slf::spinner;
-use std::path::PathBuf;
-use std::process::exit;
+use slf::{
+    gitai::{providers::create_provider, utils::git_diff, GitAIConfig},
+    spinner,
+};
+
+use std::{path::PathBuf, process::exit};
 
 #[derive(Debug, Clone, PartialEq)]
 enum Source {

@@ -1,9 +1,8 @@
 use crate::gitai::GitAIConfig;
+
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::fs;
-use std::io::Write;
-use std::path::PathBuf;
+use std::{fs, io::Write, path::PathBuf};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ShelfConfig {

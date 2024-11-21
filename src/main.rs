@@ -15,8 +15,10 @@ use colored::*;
 use config::ShelfConfig;
 use dotconf::suggest::Suggestions;
 use dotconf::Dotconf;
-use gitai::git::{git_diff, install_git_hook, remove_git_hook};
-use gitai::providers::create_provider;
+use gitai::{
+    providers::create_provider,
+    utils::{git_diff, install_git_hook, remove_git_hook},
+};
 use rusqlite::Connection;
 use walkdir::WalkDir;
 
