@@ -2,12 +2,10 @@ use anyhow::{anyhow, Result};
 use colored::Colorize;
 use std::{path::Path, process::Command};
 
-pub fn git_diff() -> Result<String> {
+pub fn get_diff_cached() -> Result<String> {
     let output = Command::new("git")
-        .arg("diff-index")
-        .arg("HEAD")
-        .arg("--stat")
-        .arg("-p")
+        .arg("diff")
+        .arg("--cached")
         .output()
         .expect("failed to execute process");
 

@@ -1,6 +1,3 @@
-//! This module provides a struct for managing dotconf files, including saving and restoring
-//! them from a database.
-
 pub mod suggest;
 
 use anyhow::{anyhow, Result};
@@ -11,20 +8,20 @@ use std::{
     time::SystemTime,
 };
 
-/// Represents a dotconf file and its metadata.
+/// Represents a dotfile and its metadata.
 #[derive(Debug, Clone)]
-pub struct Dotconf {
+pub struct Fs {
     path: PathBuf,
     content: String,
-    last_modified: SystemTime,
+    inserted: SystemTime,
 }
 
-impl Dotconf {
-    pub fn new(path: PathBuf, content: String, last_modified: SystemTime) -> Self {
+impl Fs {
+    pub fn new(path: PathBuf, content: String, inserted: SystemTime) -> Self {
         Self {
             path,
             content,
-            last_modified,
+            inserted,
         }
     }
 
@@ -32,7 +29,7 @@ impl Dotconf {
         self.path
     }
 
-    /// Creates a new `Dotconf` instance from a file on disk.
+    /// Creates a new `Dotfile` instance from disk.
     pub async fn from_file(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
         let content = tokio::fs::read_to_string(path)
@@ -54,7 +51,7 @@ impl Dotconf {
         Ok(Self::new(path.to_path_buf(), content, last_modified))
     }
 
-    /// Retrieves a `Dotconf` instance from the database based on the given file path.
+    /// Retrieves a `Dotfile` from the database based on the given file path.
     pub async fn select(conn: &Connection, path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
 
@@ -66,16 +63,16 @@ impl Dotconf {
                 Ok((row.get(0)?, row.get(1)?))
             })?;
 
-        let last_modified =
+        let inserted =
             SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(last_modified as u64);
 
-        Ok(Self::new(path.to_path_buf(), content, last_modified))
+        Ok(Self::new(path.to_path_buf(), content, inserted))
     }
 
-    /// Inserts/Updates the `Dotconf` instance in the database.
+    /// Inserts or update `Dotfile` content in the database.
     pub async fn insert(&mut self, conn: &Connection) -> Result<()> {
         let unix_timestamp = self
-            .last_modified
+            .inserted
             .duration_since(SystemTime::UNIX_EPOCH)?
             .as_secs();
 
@@ -91,7 +88,7 @@ impl Dotconf {
         Ok(())
     }
 
-    /// Removes a `Dotconf` instance from the database based on the given file path.
+    /// Removes a `Dotfile` from the database based on the given file path.
     pub async fn remove(conn: &Connection, path: impl AsRef<Path>) -> Result<()> {
         let path = path.as_ref();
         conn.execute(
@@ -101,7 +98,7 @@ impl Dotconf {
         Ok(())
     }
 
-    /// Restores the file on disk using content from the database.
+    /// Restores `Dotfile` content from the database.
     pub async fn restore(&mut self, conn: &Connection) -> Result<()> {
         let mut stmt = conn.prepare("SELECT content FROM dotconf WHERE path = ?1")?;
 
@@ -132,7 +129,7 @@ impl Dotconf {
         })?;
 
         self.content = content;
-        self.last_modified = last_modified;
+        self.inserted = last_modified;
 
         Ok(())
     }
@@ -163,11 +160,11 @@ mod tests {
         let content = "test content".to_string();
         let time = SystemTime::now();
 
-        let conf = Dotconf::new(path.clone(), content.clone(), time);
+        let conf = Fs::new(path.clone(), content.clone(), time);
 
         assert_eq!(conf.path, path, "Path should match exactly");
         assert_eq!(conf.content, content, "Content should match exactly");
-        assert_eq!(conf.last_modified, time, "Timestamp should match exactly");
+        assert_eq!(conf.inserted, time, "Timestamp should match exactly");
 
         Ok(())
     }
@@ -175,7 +172,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_path() -> Result<()> {
         let path = PathBuf::from("test/path");
-        let conf = Dotconf::new(path.clone(), "content".to_string(), SystemTime::now());
+        let conf = Fs::new(path.clone(), "content".to_string(), SystemTime::now());
 
         assert_eq!(
             conf.get_path(),
@@ -196,14 +193,14 @@ mod tests {
             ["test/path", "test content", &1630000000.to_string()],
         )?;
 
-        let result = Dotconf::select(&conn, "test/path").await?;
+        let result = Fs::select(&conn, "test/path").await?;
 
         assert_eq!(result.path.to_string_lossy(), "test/path");
         assert_eq!(result.content, "test content");
-        assert_eq!(result.last_modified, test_time);
+        assert_eq!(result.inserted, test_time);
 
         // Test non-existent path
-        assert!(Dotconf::select(&conn, "nonexistent").await.is_err());
+        assert!(Fs::select(&conn, "nonexistent").await.is_err());
 
         Ok(())
     }
@@ -213,7 +210,7 @@ mod tests {
         let conn = setup_db().await?;
         let test_time = SystemTime::UNIX_EPOCH + Duration::from_secs(1630000000);
 
-        let mut conf = Dotconf::new(
+        let mut conf = Fs::new(
             PathBuf::from("test/path"),
             "initial content".to_string(),
             test_time,
@@ -223,7 +220,7 @@ mod tests {
         conf.insert(&conn).await?;
 
         // Verify insert
-        let saved = Dotconf::select(&conn, "test/path").await?;
+        let saved = Fs::select(&conn, "test/path").await?;
         assert_eq!(saved.content, "initial content");
 
         // Test update
@@ -231,7 +228,7 @@ mod tests {
         conf.insert(&conn).await?;
 
         // Verify update
-        let updated = Dotconf::select(&conn, "test/path").await?;
+        let updated = Fs::select(&conn, "test/path").await?;
         assert_eq!(updated.content, "updated content");
 
         Ok(())
@@ -248,16 +245,16 @@ mod tests {
         )?;
 
         // Verify insertion
-        assert!(Dotconf::select(&conn, "test/path").await.is_ok());
+        assert!(Fs::select(&conn, "test/path").await.is_ok());
 
         // Test deletion
-        Dotconf::remove(&conn, "test/path").await?;
+        Fs::remove(&conn, "test/path").await?;
 
         // Verify deletion
-        assert!(Dotconf::select(&conn, "test/path").await.is_err());
+        assert!(Fs::select(&conn, "test/path").await.is_err());
 
         // Test deleting non-existent entry (should not error)
-        assert!(Dotconf::remove(&conn, "nonexistent").await.is_ok());
+        assert!(Fs::remove(&conn, "nonexistent").await.is_ok());
 
         Ok(())
     }
@@ -267,14 +264,14 @@ mod tests {
         let conn = setup_db().await?;
         let test_time = SystemTime::UNIX_EPOCH + Duration::from_secs(1630000000);
 
-        let mut conf = Dotconf::new(PathBuf::from("test/path"), "content".to_string(), test_time);
+        let mut conf = Fs::new(PathBuf::from("test/path"), "content".to_string(), test_time);
 
         conf.insert(&conn).await?;
 
-        let loaded = Dotconf::select(&conn, "test/path").await?;
+        let loaded = Fs::select(&conn, "test/path").await?;
 
         let time_diff = loaded
-            .last_modified
+            .inserted
             .duration_since(test_time)
             .unwrap_or_default()
             .as_secs();
@@ -295,7 +292,7 @@ mod tests {
         // Insert multiple test entries
         let paths = ["test/path1", "test/path2", "test/path3"];
         for path in paths.iter() {
-            let mut conf = Dotconf::new(
+            let mut conf = Fs::new(
                 PathBuf::from(path),
                 format!("content for {}", path),
                 test_time,
@@ -305,22 +302,22 @@ mod tests {
 
         // Verify all entries were inserted
         for path in paths.iter() {
-            let conf = Dotconf::select(&conn, path).await?;
+            let conf = Fs::select(&conn, path).await?;
             assert_eq!(conf.content, format!("content for {}", path));
         }
 
         // Delete multiple entries
         for path in &paths[0..2] {
-            Dotconf::remove(&conn, path).await?;
+            Fs::remove(&conn, path).await?;
         }
 
         // Verify deleted entries are gone
         for path in &paths[0..2] {
-            assert!(Dotconf::select(&conn, path).await.is_err());
+            assert!(Fs::select(&conn, path).await.is_err());
         }
 
         // Verify remaining entry still exists
-        let remaining = Dotconf::select(&conn, &paths[2]).await?;
+        let remaining = Fs::select(&conn, &paths[2]).await?;
         assert_eq!(remaining.content, format!("content for {}", paths[2]));
 
         Ok(())
@@ -340,7 +337,7 @@ mod tests {
         ];
 
         for path in dir_paths.iter() {
-            let mut conf = Dotconf::new(
+            let mut conf = Fs::new(
                 PathBuf::from(path),
                 format!("content for {}", path),
                 test_time,
@@ -350,22 +347,22 @@ mod tests {
 
         // Verify all entries exist
         for path in dir_paths.iter() {
-            let conf = Dotconf::select(&conn, path).await?;
+            let conf = Fs::select(&conn, path).await?;
             assert_eq!(conf.content, format!("content for {}", path));
         }
 
         // Delete entire directory
         for entry in dir_paths.iter().filter(|p| p.starts_with("test/dir1")) {
-            Dotconf::remove(&conn, entry).await?;
+            Fs::remove(&conn, entry).await?;
         }
 
         // Verify dir1 entries are deleted
         for entry in dir_paths.iter().filter(|p| p.starts_with("test/dir1")) {
-            assert!(Dotconf::select(&conn, entry).await.is_err());
+            assert!(Fs::select(&conn, entry).await.is_err());
         }
 
         // Verify dir2 entry still exists
-        let remaining = Dotconf::select(&conn, "test/dir2/file1").await?;
+        let remaining = Fs::select(&conn, "test/dir2/file1").await?;
         assert_eq!(remaining.content, "content for test/dir2/file1");
 
         Ok(())
@@ -384,7 +381,7 @@ mod tests {
 
         // Create initial config and save to DB
         let initial_content = "initial content".to_string();
-        let mut conf = Dotconf::new(test_path.clone(), initial_content.clone(), test_time);
+        let mut conf = Fs::new(test_path.clone(), initial_content.clone(), test_time);
         conf.insert(&conn).await?;
 
         // Write different content to file

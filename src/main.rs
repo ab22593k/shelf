@@ -1,33 +1,39 @@
+mod ai;
 mod app;
 mod config;
-mod dotconf;
-mod gitai;
+mod fs;
 mod spinner;
 
-use crate::gitai::GitAIConfig;
-
-use anyhow::Result;
-use app::{Commands, DotconfActions, GitAIActions, GitAIConfigActions, Shelf};
+use anyhow::{Context, Result};
+use app::{AIAction, AIConfigAction, Commands, FsAction, Shelf};
 use chrono::{DateTime, Utc};
 use clap::{CommandFactory, Parser};
 use clap_complete::{generate, Generator};
 use colored::*;
-use config::ShelfConfig;
-use dotconf::suggest::Suggestions;
-use dotconf::Dotconf;
-use gitai::{
-    providers::create_provider,
-    utils::{git_diff, install_git_hook, remove_git_hook},
-};
+use fs::{suggest::Suggestions, Fs};
 use rusqlite::Connection;
 use walkdir::WalkDir;
 
-use std::{io, time::SystemTime};
+use std::{io, path::PathBuf, time::UNIX_EPOCH};
+
+use crate::{
+    ai::{
+        prompt::PromptKind,
+        providers::create_provider,
+        utils::{get_diff_cached, install_git_hook, remove_git_hook},
+        AIConfig,
+    },
+    config::ConfigOp,
+};
+
+// Helper function to format timestamps
+fn format_timestamp(timestamp: i64) -> DateTime<Utc> {
+    DateTime::<Utc>::from(UNIX_EPOCH + std::time::Duration::from_secs(timestamp as u64))
+}
 
 fn print_completions<G: Generator>(gen: G, cmd: &mut clap::Command) -> Result<()> {
-    let bin_name = cmd.get_bin_name().unwrap_or("slf").to_string();
+    let bin_name = cmd.get_bin_name().unwrap_or("shelf").to_string();
     generate::<G, _>(gen, cmd, bin_name, &mut io::stdout());
-
     Ok(())
 }
 
@@ -39,271 +45,204 @@ async fn init_db(conn: &Connection) -> Result<()> {
             last_modified INTEGER NOT NULL
         )",
         [],
-    )?;
+    )
+    .context("Failed to create table")?;
+    Ok(())
+}
+
+async fn handle_fs_list(conn: &Connection, modified: bool) -> Result<()> {
+    let mut stmt = conn.prepare("SELECT path, content, last_modified FROM dotconf")?;
+    let files = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    if files.is_empty() {
+        println!("{}", "No tracked file found.".yellow());
+        return Ok(());
+    }
+
+    println!("{}", "Tracked files:".green().bold());
+
+    for (path, content, timestamp) in files {
+        println!("*{}", "-".repeat(5).bright_black());
+        let path_buf = PathBuf::from(&path);
+
+        if modified {
+            // Skip if file hasn't been modified
+            if let Ok(metadata) = std::fs::metadata(&path_buf) {
+                if let Ok(modified) = metadata.modified() {
+                    let file_timestamp = modified
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs() as i64;
+                    if file_timestamp <= timestamp {
+                        continue;
+                    }
+                }
+            }
+        }
+
+        let inserted = format_timestamp(timestamp);
+        println!("{}: {}", "Path".blue().bold(), path);
+        println!(
+            "{}: {}",
+            "Inserted".cyan().bold(),
+            inserted.format("%Y-%m-%d %H:%M:%S UTC")
+        );
+        println!("{}: {} bytes", "Size".magenta().bold(), content.len());
+    }
     Ok(())
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Shelf::parse();
-    let conf_path = ShelfConfig::dotconf_conf().get_path();
+    let conf_path = ConfigOp::create_dotconf_db().get_path();
+
     if let Some(parent) = conf_path.parent() {
-        std::fs::create_dir_all(parent)?;
+        std::fs::create_dir_all(parent).context("Failed to create config directory")?;
     }
 
-    // Ensure connection is properly initialized
-    let conn = Connection::open(conf_path.clone())?;
+    let conn = Connection::open(&conf_path).context("Failed to open database")?;
+
     init_db(&conn).await?;
 
-    // Create prepared statements for common operations
     conn.execute_batch(
         "PRAGMA foreign_keys = ON;
-                   PRAGMA journal_mode = WAL;",
-    )?;
+         PRAGMA journal_mode = WAL;",
+    )
+    .context("Failed to set pragmas")?;
 
     match cli.command {
-        Commands::Dotconf { actions } => {
-            match actions {
-                DotconfActions::List { modified } => {
-                    let conn = rusqlite::Connection::open(conf_path)?;
+        Commands::FS { actions } => match actions {
+            FsAction::List { modified } => {
+                handle_fs_list(&conn, modified).await?;
+            }
 
-                    // Query all tr acked files
-                    let mut stmt =
-                        conn.prepare("SELECT path, content, last_modified FROM dotconf")?;
-                    let files: Vec<_> = stmt
-                        .query_map([], |row| {
-                            Ok((
-                                row.get::<_, String>(0)?,
-                                row.get::<_, String>(1)?,
-                                row.get::<_, i64>(2)?,
-                            ))
-                        })?
-                        .collect::<Result<_, _>>()?;
-
-                    if files.is_empty() {
-                        println!("{}", "No tracked dotconf[s] found.".yellow());
-                        return Ok(());
-                    }
-                    println!("{}", "Tracked dotconf[s]:".green().bold());
-                    println!("{}", "=================".bright_black());
-
-                    for file in files {
-                        let (path, content, timestamp) = file;
-
-                        // Check if file exists and get its last modified time
-                        let path_buf = std::path::PathBuf::from(&path);
-
-                        if modified {
-                            if let Ok(metadata) = std::fs::metadata(&path_buf) {
-                                if let Ok(modified) = metadata.modified() {
-                                    let file_timestamp = modified
-                                        .duration_since(std::time::UNIX_EPOCH)
-                                        .unwrap()
-                                        .as_secs()
-                                        as i64;
-
-                                    // Skip if file hasn't been modified since last tracking
-                                    if file_timestamp <= timestamp {
-                                        continue;
-                                    }
-                                }
-                            }
-                        }
-
-                        let inserted = DateTime::<Utc>::from(
-                            SystemTime::UNIX_EPOCH
-                                + std::time::Duration::from_secs(timestamp as u64),
-                        );
-                        println!("{}: {}", "Path".blue().bold(), path);
-                        println!(
-                            "{}: {}",
-                            "Inserted".cyan().bold(),
-                            inserted.format("%Y-%m-%d %H:%M:%S UTC")
-                        );
-                        println!("{}: {} bytes", "Size".magenta().bold(), content.len());
-                        println!("{}", "=================".bright_black());
-                    }
-                }
-
-                DotconfActions::Remove { recursive, paths } => {
-                    let conn = Connection::open(&conf_path)?;
-                    for base_path in paths {
-                        if recursive && base_path.is_dir() {
-                            for entry in WalkDir::new(&base_path)
-                                .follow_links(true)
-                                .into_iter()
-                                .filter_map(|e| e.ok())
-                            {
-                                let path = entry.path();
-                                if path.is_file() {
-                                    if let Ok(dotconf) = Dotconf::select(&conn, path).await {
-                                        Dotconf::remove(&conn, path).await?;
-                                        println!(
-                                            "{} {}",
-                                            "Removed:".green().bold(),
-                                            dotconf.get_path().display()
-                                        );
-                                    }
-                                }
-                            }
-                        } else if let Ok(dotconf) = Dotconf::select(&conn, &base_path).await {
-                            Dotconf::remove(&conn, &base_path).await?;
-                            println!(
-                                "{} {}",
-                                "Removed:".green().bold(),
-                                dotconf.get_path().display()
-                            );
-                        } else {
-                            eprintln!(
-                                "{} No such dotconf found: {:?}",
-                                "Error:".red().bold(),
-                                base_path
-                            );
-                        }
-                    }
-                }
-                DotconfActions::Copy {
-                    recursive,
-                    restore,
-                    paths,
-                } => {
-                    let conn = Connection::open(&conf_path)?;
-
-                    for base_path in paths {
-                        if recursive && base_path.is_dir() {
-                            for entry in WalkDir::new(&base_path)
-                                .follow_links(true)
-                                .into_iter()
-                                .filter_map(|e| e.ok())
-                            {
-                                let path = entry.path();
-                                if path.is_file() {
-                                    if restore {
-                                        if let Ok(mut dotconf) = Dotconf::select(&conn, path).await
-                                        {
-                                            dotconf.restore(&conn).await?;
-                                            println!(
-                                                "{} {:?}",
-                                                "Successfully restored".green().bold(),
-                                                path
-                                            );
-                                        }
-                                    } else {
-                                        match Dotconf::from_file(path).await {
-                                            Ok(mut dotconf) => {
-                                                dotconf.insert(&conn).await?;
-                                                println!(
-                                                    "{} {:?}",
-                                                    "Successfully copied".green().bold(),
-                                                    path
-                                                );
-                                            }
-                                            Err(e) => {
-                                                println!(
-                                                    "{} {:?}: {}",
-                                                    "Failed to copy".red().bold(),
-                                                    path,
-                                                    e
-                                                );
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        } else if restore {
-                            if let Ok(mut dotconf) = Dotconf::select(&conn, &base_path).await {
-                                dotconf.restore(&conn).await?;
+            FsAction::Untrack { recursive, paths } => {
+                for base_path in paths {
+                    if recursive && base_path.is_dir() {
+                        for entry in WalkDir::new(&base_path)
+                            .follow_links(true)
+                            .into_iter()
+                            .filter_map(Result::ok)
+                            .filter(|e| e.path().is_file())
+                        {
+                            if let Ok(dotconf) = Fs::select(&conn, entry.path()).await {
+                                Fs::remove(&conn, entry.path()).await?;
                                 println!(
-                                    "{} {:?}",
-                                    "Successfully restored".green().bold(),
-                                    base_path
+                                    "{} {}",
+                                    "Removed:".green().bold(),
+                                    dotconf.get_path().display()
                                 );
                             }
-                        } else {
-                            match Dotconf::from_file(&base_path).await {
-                                Ok(mut dotconf) => {
-                                    dotconf.insert(&conn).await?;
-                                    println!(
-                                        "{} {:?}",
-                                        "Successfully copied".green().bold(),
-                                        base_path
-                                    );
-                                }
-                                Err(e) => {
-                                    eprintln!(
-                                        "{} {:?}: {}",
-                                        "Failed to copy".red().bold(),
-                                        base_path,
-                                        e
-                                    );
-                                }
-                            }
                         }
-                    }
-                }
-                DotconfActions::Suggest { interactive } => {
-                    let conn = Connection::open(&conf_path)?;
-                    let suggestions = Suggestions::default();
-
-                    if interactive {
-                        match suggestions.interactive_selection() {
-                            Ok(selected) => {
-                                for path in selected {
-                                    let expanded_path = shellexpand::tilde(&path).to_string();
-                                    match Dotconf::from_file(expanded_path).await {
-                                        Ok(mut dotconf) => match dotconf.insert(&conn).await {
-                                            Ok(_) => {
-                                                println!("{} {}", "Added".green().bold(), path)
-                                            }
-                                            Err(e) => eprintln!(
-                                                "{} {}: {}",
-                                                "Failed".red().bold(),
-                                                path,
-                                                e
-                                            ),
-                                        },
-                                        Err(e) => {
-                                            eprintln!("{} {}: {}", "Error".red().bold(), path, e)
-                                        }
-                                    }
-                                }
-                            }
-                            Err(e) => eprintln!("{} {}", "Selection failed:".red().bold(), e),
-                        }
+                    } else if let Ok(dotconf) = Fs::select(&conn, &base_path).await {
+                        Fs::remove(&conn, &base_path).await?;
+                        println!(
+                            "{} {}",
+                            "Removed:".green().bold(),
+                            dotconf.get_path().display()
+                        );
                     } else {
-                        suggestions.print_suggestions();
+                        eprintln!("{} No such file: {:?}", "Error:".red().bold(), base_path);
                     }
                 }
             }
-        }
-        Commands::Gitai { actions } => match actions {
-            GitAIActions::Commit {
+
+            FsAction::Track {
+                recursive,
+                restore,
+                paths,
+            } => {
+                for base_path in paths {
+                    if recursive && base_path.is_dir() {
+                        for entry in WalkDir::new(&base_path)
+                            .follow_links(true)
+                            .into_iter()
+                            .filter_map(Result::ok)
+                            .filter(|e| e.path().is_file())
+                        {
+                            let path = entry.path();
+                            if restore {
+                                if let Ok(mut dotconf) = Fs::select(&conn, path).await {
+                                    dotconf.restore(&conn).await?;
+                                    println!("{} {:?}", "Restored:".green().bold(), path);
+                                }
+                            } else if let Ok(mut dotconf) = Fs::from_file(path).await {
+                                dotconf.insert(&conn).await?;
+                                println!("{} {:?}", "Tracked:".green().bold(), path);
+                            }
+                        }
+                    } else if restore {
+                        if let Ok(mut dotconf) = Fs::select(&conn, &base_path).await {
+                            dotconf.restore(&conn).await?;
+                            println!("{} {:?}", "Restored:".green().bold(), base_path);
+                        }
+                    } else if let Ok(mut dotconf) = Fs::from_file(&base_path).await {
+                        dotconf.insert(&conn).await?;
+                        println!("{} {:?}", "Tracked:".green().bold(), base_path);
+                    }
+                }
+            }
+
+            FsAction::Suggest { interactive } => {
+                let suggestions = Suggestions::default();
+
+                if interactive {
+                    match suggestions.interactive_selection() {
+                        Ok(selected) => {
+                            for path in selected {
+                                let expanded_path = shellexpand::tilde(&path).to_string();
+                                if let Ok(mut file) = Fs::from_file(expanded_path).await {
+                                    if file.insert(&conn).await.is_ok() {
+                                        println!("{} {}", "Added:".green().bold(), path);
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => eprintln!("{} {}", "Selection failed:".red().bold(), e),
+                    }
+                } else {
+                    suggestions.print_suggestions();
+                }
+            }
+        },
+
+        Commands::AI { actions } => match actions {
+            AIAction::Commit {
                 provider: provider_override,
-                install_hook,
-                uninstall_hook,
+                hooki,
+                hookr,
             } => {
                 let repo = git2::Repository::open_from_env()?;
-                let git_dir = repo.path();
-                let hooks_dir = git_dir.join("hooks");
+                let hooks_dir = repo.path().join("hooks");
 
-                if install_hook {
+                if hooki {
                     return install_git_hook(&hooks_dir);
                 }
 
-                if uninstall_hook {
+                if hookr {
                     return remove_git_hook(&hooks_dir);
                 }
 
-                let mut config = GitAIConfig::load().await?;
+                let mut config = AIConfig::load().await?;
                 if let Some(provider_name) = provider_override {
                     config.provider = provider_name;
                 }
 
                 let provider = create_provider(&config)?;
-
                 let commit_msg = spinner::new(|| async {
-                    let diff = git_diff();
-                    provider.generate_commit_message(&diff?).await
+                    let diff = get_diff_cached()?;
+                    provider
+                        .generate_assistant_message(PromptKind::Commit, &diff)
+                        .await
                 })
                 .await?;
 
@@ -313,30 +252,55 @@ async fn main() -> Result<()> {
                     commit_msg
                 );
             }
-            GitAIActions::Config { action } => match action {
-                GitAIConfigActions::Set { key, value } => {
-                    let mut config = GitAIConfig::load().await?;
+
+            AIAction::Review {
+                provider: provider_override,
+            } => {
+                let mut config = AIConfig::load().await?;
+                if let Some(provider_name) = provider_override {
+                    config.provider = provider_name;
+                }
+
+                let provider = create_provider(&config)?;
+                let review = spinner::new(|| async {
+                    let diff = get_diff_cached()?;
+                    provider
+                        .generate_assistant_message(PromptKind::Review, &diff)
+                        .await
+                })
+                .await?;
+
+                println!("{}\n{}", "Code review:".green().bold(), review);
+            }
+
+            AIAction::Config { action } => match action {
+                AIConfigAction::Set { key, value } => {
+                    let mut config = AIConfig::load().await?;
                     config.set(&key, &value)?;
                     config.save().await?;
                     println!("{} {} = {}", "Set:".green().bold(), key, value);
                 }
-                GitAIConfigActions::Get { key } => {
-                    let config = GitAIConfig::load().await?;
+
+                AIConfigAction::Get { key } => {
+                    let config = AIConfig::load().await?;
                     if let Some(value) = config.get(&key) {
                         println!("{}", value);
                     } else {
                         println!("{} Key not found: {}", "Error:".red().bold(), key);
                     }
                 }
-                GitAIConfigActions::List => {
-                    let config = GitAIConfig::load().await?;
+
+                AIConfigAction::List => {
+                    let config = AIConfig::load().await?;
                     println!("{}", "Configuration:".green().bold());
-                    config.list().iter().for_each(|(k, v)| {
-                        println!("{} = {}", k, v);
-                    });
+                    config
+                        .list()
+                        .iter()
+                        .for_each(|(k, v)| println!("{} = {}", k, v));
                 }
             },
         },
+
         Commands::Completion { shell } => print_completions(shell, &mut Shelf::command())?,
     }
     Ok(())

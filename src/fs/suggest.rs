@@ -1,13 +1,13 @@
-//! Manages and suggests common configuration files files.
+//! Manages and suggests common configuration files.
 
 use anyhow::Result;
 
-/// Collection of [`Dotconf`] suggestions organized by categories.
+/// Collection of `Dotfile` suggestions organized by categories.
 pub struct Suggestions {
     categories: Vec<Category>,
 }
 
-/// Category of [`Dotconf`] files with name and file paths.
+/// Category of `Dotfile`.
 struct Category {
     name: &'static str,
     files: Vec<&'static str>,
@@ -235,5 +235,47 @@ impl Suggestions {
         }
 
         Ok(selected_files)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_suggestions_default() {
+        let suggestions = Suggestions::default();
+        assert!(!suggestions.categories.is_empty());
+
+        // Check shell category exists and contains expected files
+        let shell_category = suggestions
+            .categories
+            .iter()
+            .find(|c| c.name == "Shell")
+            .expect("Shell category should exist");
+        assert!(shell_category.files.contains(&"~/.bashrc"));
+        assert!(shell_category.files.contains(&"~/.zshrc"));
+
+        // Check VCS category exists and contains expected files
+        let vcs_category = suggestions
+            .categories
+            .iter()
+            .find(|c| c.name == "VCS")
+            .expect("VCS category should exist");
+        assert!(vcs_category.files.contains(&"~/.gitconfig"));
+        assert!(vcs_category.files.contains(&"~/.gitignore_global"));
+
+        // Verify each category has a name and files
+        for category in &suggestions.categories {
+            assert!(!category.name.is_empty());
+            assert!(!category.files.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_print_suggestions() {
+        let suggestions = Suggestions::default();
+        // Just verify it doesn't panic
+        suggestions.print_suggestions();
     }
 }

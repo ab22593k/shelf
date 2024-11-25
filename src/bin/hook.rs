@@ -7,8 +7,8 @@
 use anyhow::{anyhow, Result};
 use clap::Parser;
 use colored::*;
-use slf::{
-    gitai::{providers::create_provider, utils::git_diff, GitAIConfig},
+use shelf::{
+    ai::{prompt::PromptKind, providers::create_provider, utils::get_diff_cached, AIConfig},
     spinner,
 };
 
@@ -53,12 +53,14 @@ struct Args {
 
 async fn handle_commit(args: &Args) -> Result<()> {
     // Generate commit message from detailed diff
-    let config = GitAIConfig::load().await?;
+    let config = AIConfig::load().await?;
     let provider = create_provider(&config)?;
 
     let mut commit_msg = spinner::new(|| async {
-        let diff = git_diff();
-        provider.generate_commit_message(&diff?).await
+        let diff = get_diff_cached();
+        provider
+            .generate_assistant_message(PromptKind::Commit, &diff?)
+            .await
     })
     .await?;
 

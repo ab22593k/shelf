@@ -2,28 +2,30 @@
 
 [![Shelf CI](https://github.com/ab22593k/shelf/actions/workflows/ci.yml/badge.svg)](https://github.com/ab22593k/shelf/actions/workflows/ci.yml)
 
-Shelf is a command-line tool for managing dotconf files and generating git commit messages
-using AI. It provides a simple interface to track dotfiles across your system and integrates
-with multiple AI providers to automatically generate meaningful commit messages through git hooks.
-With support for local and cloud-based AI models, Shelf makes both dotfile management and git commits effortless.
+Shelf is a command-line tool for managing system files, generating git commit messages, and reviewing code
+using AI. It provides a simple interface to track files across your system and integrates
+with multiple AI providers to automatically generate meaningful commit messages through git hooks and perform
+comprehensive code reviews. With support for local and cloud-based AI models, Shelf makes configuration file
+management, git commits, and code reviews effortless.
 
 ## Features
 
-- Track dotconf files from anywhere in your file system recursively
+- Track dotfiles from anywhere in your file system recursively
 - List all tracked dotfiles
-- Remove dotconf files recursively from database
+- Remove dotfiles recursively from database
 - AI-powered git commit message generation with multiple providers:
   - Groq
   - Google Gemini
   - Anthropic Claude
   - OpenAI
-  - XAI grok
+  - Xai grok
   - Ollama (local)
 - Git hooks integration for automatic commit message generation
 
 ## Installation
 
-To install Shelf, you need to have Rust and Cargo installed on your system. If you don't have them, you can install them from [rustup.rs](https://rustup.rs/).
+To install Shelf, you need to have Rust and Cargo installed on your system. If you don't have them,
+you can install them from [rustup.rs](https://rustup.rs/).
 
 Once you have Rust and Cargo installed, you can build and install Shelf using the following command:
 
@@ -38,49 +40,49 @@ Shelf provides commands for both dotfile management and git integration:
 
 ```bash
 # Add a new dotfile to track
-slf dotconf cp ~/.bashrc
+shelf fs tarck ~/.bashrc
 
 # List all tracked dotfiles
-slf dotconf ls
+shelf fs list
 
 # Remove a dotfile from tracking
-slf dotconf rm ~/.bashrc
+shelf fs untarck ~/.bashrc
 
 # Interactive selection of dotfiles to track
-slf dotconf suggest -i
+shelf fs suggest -i
 
 # Show help
-slf --help
+shelf --help
 ```
 
 Each command can be run with `-h` or `--help` for more information.
 
 ### Git AI Integration
 
-The `gitai` subcommand provides AI-powered git commit message generation:
+The `ai` subcommand provides AI-powered features:
 
 ```bash
 # Generate commit message for staged changes
-slf gitai commit
+shelf ai commit
 
 # Install git hook for automatic message generation
-slf gitai commit --install-hook
+shelf ai commit --install-hook
 
 # Remove git hook
-slf gitai commit --uninstal-hook
+shelf ai commit --uninstal-hook
 
 # Configure AI provider
-slf gitai config set provider openai
-slf gitai config set openai_api_key "your-api-key"
+shelf ai config set provider openai
+shelf ai config set openai_api_key "your-api-key"
 
 # Use specific provider for one commit
-slf gitai commit -p openai
+shelf ai commit -p openai
 
 # List current configuration
-slf gitai config list
+shelf ai config list
 ```
 
-The GitAI features support multiple AI providers:
+The AI-powered features support diffrent AI providers:
 - **Groq** (default): GroqCloud-based models
 - **Google Gemini**: Cloud-based using Gemini models
 - **OpenAI**: Cloud-based using GPT models
@@ -100,19 +102,43 @@ git commit -m "feat: your message"
 git commit --amend
 ```
 
+### Code Review with AI
+
+Shelf can assist in code review by analyzing pull requests and providing AI-powered feedback:
+
+```bash
+# Review the current staged branch's changes
+shelf ai review
+
+# Review specific files
+shelf ai review path/to/file.rs
+
+# Review with specific provider
+shelf ai review -p openai
+```
+
+The AI review provides:
+- Code quality analysis
+- Potential bug detection
+- Style guide compliance checks
+- Security vulnerability scanning
+- Performance improvement suggestions
+- Best practice recommendations
+
 ## Shell Completion
 
-Shelf supports generating shell completion scripts for various shells. You can generate these scripts using the `completion` subcommand:
+Shelf supports generating shell completion scripts for various shells. You can generate these
+scripts using the `completion` subcommand:
 
 ```bash
 # Generate completion script for Bash
-slf completion bash > slf.bash
+shelf completion bash > shelf.bash
 
 # Generate completion script for Zsh
-slf completion zsh > _slf
+shelf completion zsh > _shelf
 
 # Generate completion script for Fish
-slf completion fish > slf.fish
+shelf completion fish > shelf.fish
 ```
 
 To use the completion scripts:
@@ -120,20 +146,20 @@ To use the completion scripts:
 - For Bash, add the following line to your `~/.bashrc`:
 
   ```bash
-  source /path/to/slf.bash
+  source /path/to/shelf.bash
   ```
 
-- For Zsh, place the `_slf` file in `~/.zfunc`, then add `source ~/.zfunc/_slf` in `~/.zshrc`.
+- For Zsh, place the `_shelf` file in `~/.zfunc`, then add `source ~/.zfunc/_shelf` in `~/.zshrc`.
 
-- For Fish, place the `slf.fish` file in `~/.config/fish/completions`.
+- For Fish, place the `shelf.fish` file in `~/.config/fish/completions`.
 
-After setting up the completion script, restart your shell or source the respective configuration file to enable completions for the `slf` command.
+After setting up the completion script, restart your shell or source the respective configuration file to enable completions for the `shelf` command.
 
 ## Configuration
 
 GitAI settings are stored in `~/.config/shelf/gitai.json` (or `$XDG_CONFIG_HOME/shelf/gitai.json` if set). You can configure:
 
-- `provider`: AI provider to use (`ollama`, `openai`, `anthropic`, `gemini`, `groq`)
+- `provider`: AI provider to use (`ollama`, `openai`, `anthropic`, `gemini`, `groq` and `xai`)
 - `ollama_host`: Ollama server URL (default: `http://localhost:11434`)
 - `ollama_model`: Ollama model to use (default: `qwen2.5-coder`)
 - `openai_api_key`: OpenAI API key for GPT models
@@ -161,10 +187,10 @@ cargo test
 To run the project directly without installing:
 
 ```
-cargo run --bin slf -- [SUBCOMMAND]
+cargo run --bin shelf -- [SUBCOMMAND]
 ```
 
-Replace `[SUBCOMMAND]` with the command you want to run, such as `dotconf` or `gitai`.
+Replace `[SUBCOMMAND]` with the command you want to run, such as `dotfile` or `ai`.
 
 ## Contributing
 

@@ -1,0 +1,6 @@
+Please review the following code changes and provide a detailed analysis. Consider:
+1. Potential bugs or issues
+2. Code style and best practices
+3. Performance implications
+4. Security concerns
+Here is the diff:
