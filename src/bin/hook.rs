@@ -8,11 +8,12 @@ use anyhow::{anyhow, Result};
 use clap::Parser;
 use colored::*;
 use shelf::{
-    ai::{prompt::PromptKind, providers::create_provider, utils::get_diff_cached, AIConfig},
+    ai::{git::get_diff_cached, prompt::PromptKind, provider::create_provider},
+    config::ShelfConfig,
     spinner,
 };
 
-use std::{path::PathBuf, process::exit};
+use std::{fs, path::PathBuf, process::exit};
 
 #[derive(Debug, Clone, PartialEq)]
 enum Source {
@@ -51,23 +52,21 @@ struct Args {
     sha1: Option<String>,
 }
 
-async fn handle_commit(args: &Args) -> Result<()> {
+async fn handle_commit(config: ShelfConfig, args: &Args) -> Result<()> {
     // Generate commit message from detailed diff
-    let config = AIConfig::load().await?;
+    let config = config.read_all()?;
     let provider = create_provider(&config)?;
 
-    let mut commit_msg = spinner::new(|| async {
-        let diff = get_diff_cached();
+    let commit_msg = spinner::new(|| async {
+        let diff = get_diff_cached(".");
         provider
             .generate_assistant_message(PromptKind::Commit, &diff?)
             .await
     })
     .await?;
 
-    commit_msg = commit_msg.trim().to_string();
-
     // Write the message
-    std::fs::write(&args.commit_msg_file, commit_msg)?;
+    fs::write(&args.commit_msg_file, commit_msg.trim())?;
 
     Ok(())
 }
@@ -83,13 +82,13 @@ async fn main() -> Result<()> {
 
     // Check if there's already a message
     if args.commit_msg_file.exists() {
-        let content = std::fs::read_to_string(&args.commit_msg_file)?;
+        let content = fs::read_to_string(&args.commit_msg_file)?;
         if !content.trim().is_empty() {
             return Ok(());
         }
     }
 
-    if let Err(e) = handle_commit(&args).await {
+    if let Err(e) = handle_commit(ShelfConfig::default(), &args).await {
         eprintln!("{} {}", "Error:".red().bold(), e);
         exit(1);
     }

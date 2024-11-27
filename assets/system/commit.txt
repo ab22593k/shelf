@@ -32,7 +32,6 @@ OUTPUT REQUIREMENTS:
 4. When to Add Body:
    - Explain breaking changes
    - Describe complex changes
-   - Explain the motivation for changes
    - Document side effects
 
 EXAMPLE RESPONSES:
@@ -56,8 +55,5 @@ Special Instructions:
 2. If breaking changes exist, always include them in the footer
 3. Include relevant ticket/issue numbers if provided
 4. Use scope to indicate the component being modified
-
-Remember: A good commit message should complete this sentence:
-"If applied, this commit will... <your commit message>"
 
 **Return ONLY the commit message**: no introduction, no explanation, no quotes around it

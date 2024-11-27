@@ -1,35 +1,32 @@
 mod ai;
 mod app;
 mod config;
-mod fs;
+mod df;
 mod spinner;
-
-use anyhow::{Context, Result};
-use app::{AIAction, AIConfigAction, Commands, FsAction, Shelf};
-use chrono::{DateTime, Utc};
-use clap::{CommandFactory, Parser};
-use clap_complete::{generate, Generator};
-use colored::*;
-use fs::{suggest::Suggestions, Fs};
-use rusqlite::Connection;
-use walkdir::WalkDir;
-
-use std::{io, path::PathBuf, time::UNIX_EPOCH};
 
 use crate::{
     ai::{
+        git::{get_diff_cached, install_git_hook, remove_git_hook},
         prompt::PromptKind,
-        providers::create_provider,
-        utils::{get_diff_cached, install_git_hook, remove_git_hook},
-        AIConfig,
+        provider::create_provider,
     },
-    config::ConfigOp,
+    config::ShelfConfig,
 };
 
-// Helper function to format timestamps
-fn format_timestamp(timestamp: i64) -> DateTime<Utc> {
-    DateTime::<Utc>::from(UNIX_EPOCH + std::time::Duration::from_secs(timestamp as u64))
-}
+use anyhow::{Context, Result};
+use app::{AIAction, AIConfigAction, Commands, DfAction, Shelf};
+use clap::{CommandFactory, Parser};
+use clap_complete::{generate, Generator};
+use colored::*;
+use df::{
+    op::{handle_fs_list, handle_fs_track, handle_fs_untrack},
+    suggest::handle_fs_suggest,
+};
+use rusqlite::Connection;
+
+use std::{fs, io};
+
+pub const DF_STORAGE_FILENAME: &str = "storage.sqlite";
 
 fn print_completions<G: Generator>(gen: G, cmd: &mut clap::Command) -> Result<()> {
     let bin_name = cmd.get_bin_name().unwrap_or("shelf").to_string();
@@ -37,7 +34,7 @@ fn print_completions<G: Generator>(gen: G, cmd: &mut clap::Command) -> Result<()
     Ok(())
 }
 
-async fn init_db(conn: &Connection) -> Result<()> {
+async fn initialize_database(conn: &Connection) -> Result<()> {
     conn.execute(
         "CREATE TABLE IF NOT EXISTS dotconf (
             path TEXT PRIMARY KEY,
@@ -47,55 +44,106 @@ async fn init_db(conn: &Connection) -> Result<()> {
         [],
     )
     .context("Failed to create table")?;
+
     Ok(())
 }
 
-async fn handle_fs_list(conn: &Connection, modified: bool) -> Result<()> {
-    let mut stmt = conn.prepare("SELECT path, content, last_modified FROM dotconf")?;
-    let files = stmt
-        .query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, i64>(2)?,
-            ))
-        })?
-        .collect::<Result<Vec<_>, _>>()?;
+async fn handle_ai_commit(
+    app_conf: ShelfConfig,
+    provider_override: Option<String>,
+    model_override: Option<String>,
+    install_hook: bool,
+    remove_hook: bool,
+) -> Result<()> {
+    let repo = git2::Repository::open_from_env()?;
+    let hooks_dir = repo.path().join("hooks");
 
-    if files.is_empty() {
-        println!("{}", "No tracked file found.".yellow());
-        return Ok(());
+    if install_hook {
+        return install_git_hook(&hooks_dir);
     }
 
-    println!("{}", "Tracked files:".green().bold());
+    if remove_hook {
+        return remove_git_hook(&hooks_dir);
+    }
 
-    for (path, content, timestamp) in files {
-        println!("*{}", "-".repeat(5).bright_black());
-        let path_buf = PathBuf::from(&path);
+    // let mut config = AI::load().await?;
+    let mut ai_config = app_conf.read_all()?;
+    if let Some(provider_name) = provider_override {
+        ai_config.provider = provider_name;
+    }
+    if let Some(model_name) = model_override {
+        ai_config.model = model_name;
+    }
 
-        if modified {
-            // Skip if file hasn't been modified
-            if let Ok(metadata) = std::fs::metadata(&path_buf) {
-                if let Ok(modified) = metadata.modified() {
-                    let file_timestamp = modified
-                        .duration_since(UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs() as i64;
-                    if file_timestamp <= timestamp {
-                        continue;
-                    }
-                }
+    let provider = create_provider(&ai_config)?;
+    let commit_msg = spinner::new(|| async {
+        let diff = get_diff_cached(".")?;
+        provider
+            .generate_assistant_message(PromptKind::Commit, &diff)
+            .await
+    })
+    .await?;
+
+    println!(
+        "{}\n{}",
+        "Generated commit message:".green().bold(),
+        commit_msg
+    );
+    Ok(())
+}
+
+async fn handle_ai_review(
+    configs: ShelfConfig,
+    provider_override: Option<String>,
+    model_override: Option<String>,
+) -> Result<()> {
+    let mut dd = configs.read_all()?;
+    if let Some(provider_name) = provider_override {
+        dd.provider = provider_name;
+    }
+    if let Some(model_name) = model_override {
+        dd.model = model_name;
+    }
+
+    let provider = create_provider(&dd)?;
+    let review = spinner::new(|| async {
+        let diff = get_diff_cached(".")?;
+        provider
+            .generate_assistant_message(PromptKind::Review, &diff)
+            .await
+    })
+    .await?;
+
+    println!("{}\n{}", "Code review:".green().bold(), review);
+    Ok(())
+}
+
+async fn handle_ai_config(ff: ShelfConfig, action: AIConfigAction) -> Result<()> {
+    match action {
+        AIConfigAction::Set { key, value } => {
+            let mut config = ff.read_all()?;
+            config.set(&key, &value)?;
+            config.write_all().await?;
+            println!("{} {} = {}", "Set:".green().bold(), key, value);
+        }
+
+        AIConfigAction::Get { key } => {
+            let config = ff.read_all()?;
+            if let Some(value) = config.get(&key) {
+                println!("{}", value);
+            } else {
+                println!("{} Key not found: {}", "Error:".red().bold(), key);
             }
         }
 
-        let inserted = format_timestamp(timestamp);
-        println!("{}: {}", "Path".blue().bold(), path);
-        println!(
-            "{}: {}",
-            "Inserted".cyan().bold(),
-            inserted.format("%Y-%m-%d %H:%M:%S UTC")
-        );
-        println!("{}: {} bytes", "Size".magenta().bold(), content.len());
+        AIConfigAction::List => {
+            let config = ff.read_all()?;
+            println!("{}", "Configuration:".green().bold());
+            config
+                .list()
+                .iter()
+                .for_each(|(k, v)| println!("{} = {}", k, v));
+        }
     }
     Ok(())
 }
@@ -103,15 +151,17 @@ async fn handle_fs_list(conn: &Connection, modified: bool) -> Result<()> {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Shelf::parse();
-    let conf_path = ConfigOp::create_dotconf_db().get_path();
+    let config = ShelfConfig::default();
+    let storage_file = directories::BaseDirs::new()
+        .map(|base| base.data_dir().join("shelf").join(DF_STORAGE_FILENAME))
+        .expect("Could not create `shelf` data directory");
 
-    if let Some(parent) = conf_path.parent() {
-        std::fs::create_dir_all(parent).context("Failed to create config directory")?;
+    if !config.path.exists() {
+        fs::create_dir_all(&config.path).context("Failed to create `shelf` config directory")?;
     }
 
-    let conn = Connection::open(&conf_path).context("Failed to open database")?;
-
-    init_db(&conn).await?;
+    let conn = Connection::open(&storage_file).context("Failed to open database")?;
+    initialize_database(&conn).await?;
 
     conn.execute_batch(
         "PRAGMA foreign_keys = ON;
@@ -120,188 +170,87 @@ async fn main() -> Result<()> {
     .context("Failed to set pragmas")?;
 
     match cli.command {
-        Commands::FS { actions } => match actions {
-            FsAction::List { modified } => {
-                handle_fs_list(&conn, modified).await?;
+        Commands::Df { actions } => match actions {
+            DfAction::List { modified } => handle_fs_list(&conn, modified).await?,
+            DfAction::Untrack { recursive, paths } => {
+                handle_fs_untrack(&conn, recursive, paths).await?
             }
-
-            FsAction::Untrack { recursive, paths } => {
-                for base_path in paths {
-                    if recursive && base_path.is_dir() {
-                        for entry in WalkDir::new(&base_path)
-                            .follow_links(true)
-                            .into_iter()
-                            .filter_map(Result::ok)
-                            .filter(|e| e.path().is_file())
-                        {
-                            if let Ok(dotconf) = Fs::select(&conn, entry.path()).await {
-                                Fs::remove(&conn, entry.path()).await?;
-                                println!(
-                                    "{} {}",
-                                    "Removed:".green().bold(),
-                                    dotconf.get_path().display()
-                                );
-                            }
-                        }
-                    } else if let Ok(dotconf) = Fs::select(&conn, &base_path).await {
-                        Fs::remove(&conn, &base_path).await?;
-                        println!(
-                            "{} {}",
-                            "Removed:".green().bold(),
-                            dotconf.get_path().display()
-                        );
-                    } else {
-                        eprintln!("{} No such file: {:?}", "Error:".red().bold(), base_path);
-                    }
-                }
-            }
-
-            FsAction::Track {
+            DfAction::Track {
                 recursive,
                 restore,
                 paths,
-            } => {
-                for base_path in paths {
-                    if recursive && base_path.is_dir() {
-                        for entry in WalkDir::new(&base_path)
-                            .follow_links(true)
-                            .into_iter()
-                            .filter_map(Result::ok)
-                            .filter(|e| e.path().is_file())
-                        {
-                            let path = entry.path();
-                            if restore {
-                                if let Ok(mut dotconf) = Fs::select(&conn, path).await {
-                                    dotconf.restore(&conn).await?;
-                                    println!("{} {:?}", "Restored:".green().bold(), path);
-                                }
-                            } else if let Ok(mut dotconf) = Fs::from_file(path).await {
-                                dotconf.insert(&conn).await?;
-                                println!("{} {:?}", "Tracked:".green().bold(), path);
-                            }
-                        }
-                    } else if restore {
-                        if let Ok(mut dotconf) = Fs::select(&conn, &base_path).await {
-                            dotconf.restore(&conn).await?;
-                            println!("{} {:?}", "Restored:".green().bold(), base_path);
-                        }
-                    } else if let Ok(mut dotconf) = Fs::from_file(&base_path).await {
-                        dotconf.insert(&conn).await?;
-                        println!("{} {:?}", "Tracked:".green().bold(), base_path);
-                    }
-                }
-            }
-
-            FsAction::Suggest { interactive } => {
-                let suggestions = Suggestions::default();
-
-                if interactive {
-                    match suggestions.interactive_selection() {
-                        Ok(selected) => {
-                            for path in selected {
-                                let expanded_path = shellexpand::tilde(&path).to_string();
-                                if let Ok(mut file) = Fs::from_file(expanded_path).await {
-                                    if file.insert(&conn).await.is_ok() {
-                                        println!("{} {}", "Added:".green().bold(), path);
-                                    }
-                                }
-                            }
-                        }
-                        Err(e) => eprintln!("{} {}", "Selection failed:".red().bold(), e),
-                    }
-                } else {
-                    suggestions.print_suggestions();
-                }
-            }
+            } => handle_fs_track(&conn, recursive, restore, paths).await?,
+            DfAction::Suggest { interactive } => handle_fs_suggest(&conn, interactive).await?,
         },
-
-        Commands::AI { actions } => match actions {
+        Commands::Ai { actions } => match actions {
             AIAction::Commit {
                 provider: provider_override,
-                hooki,
-                hookr,
+                model: model_override,
+                install_hook,
+                remove_hook,
             } => {
-                let repo = git2::Repository::open_from_env()?;
-                let hooks_dir = repo.path().join("hooks");
-
-                if hooki {
-                    return install_git_hook(&hooks_dir);
-                }
-
-                if hookr {
-                    return remove_git_hook(&hooks_dir);
-                }
-
-                let mut config = AIConfig::load().await?;
-                if let Some(provider_name) = provider_override {
-                    config.provider = provider_name;
-                }
-
-                let provider = create_provider(&config)?;
-                let commit_msg = spinner::new(|| async {
-                    let diff = get_diff_cached()?;
-                    provider
-                        .generate_assistant_message(PromptKind::Commit, &diff)
-                        .await
-                })
-                .await?;
-
-                println!(
-                    "{}\n{}",
-                    "Generated commit message:".green().bold(),
-                    commit_msg
-                );
+                handle_ai_commit(
+                    config,
+                    provider_override,
+                    model_override,
+                    install_hook,
+                    remove_hook,
+                )
+                .await?
             }
-
             AIAction::Review {
                 provider: provider_override,
-            } => {
-                let mut config = AIConfig::load().await?;
-                if let Some(provider_name) = provider_override {
-                    config.provider = provider_name;
-                }
-
-                let provider = create_provider(&config)?;
-                let review = spinner::new(|| async {
-                    let diff = get_diff_cached()?;
-                    provider
-                        .generate_assistant_message(PromptKind::Review, &diff)
-                        .await
-                })
-                .await?;
-
-                println!("{}\n{}", "Code review:".green().bold(), review);
-            }
-
-            AIAction::Config { action } => match action {
-                AIConfigAction::Set { key, value } => {
-                    let mut config = AIConfig::load().await?;
-                    config.set(&key, &value)?;
-                    config.save().await?;
-                    println!("{} {} = {}", "Set:".green().bold(), key, value);
-                }
-
-                AIConfigAction::Get { key } => {
-                    let config = AIConfig::load().await?;
-                    if let Some(value) = config.get(&key) {
-                        println!("{}", value);
-                    } else {
-                        println!("{} Key not found: {}", "Error:".red().bold(), key);
-                    }
-                }
-
-                AIConfigAction::List => {
-                    let config = AIConfig::load().await?;
-                    println!("{}", "Configuration:".green().bold());
-                    config
-                        .list()
-                        .iter()
-                        .for_each(|(k, v)| println!("{} = {}", k, v));
-                }
-            },
+                model: model_override,
+            } => handle_ai_review(config, provider_override, model_override).await?,
+            AIAction::Config { action } => handle_ai_config(config, action).await?,
         },
+        Commands::Migrate { fix } => {
+            if fix {
+                // Perform legacy config file migration
+                let dotconf_file = config.path.join("dotconf.db");
+                let gitai_file = config.path.join("gitai.json");
+                let new_ai_file = gitai_file.parent().unwrap().join("ai.json");
 
+                // Check if files exist and migration is needed
+                let should_migrate = dotconf_file.exists() || gitai_file.exists();
+                let can_migrate = !storage_file.exists() && gitai_file.exists();
+
+                if should_migrate {
+                    if can_migrate {
+                        eprintln!(
+                            "{}",
+                            "Error: Database already exists at new location.".red()
+                        );
+
+                        return Ok(());
+                    }
+
+                    // Perform migration
+                    if dotconf_file.exists() {
+                        fs::rename(&dotconf_file, &storage_file)?;
+                    }
+                    if gitai_file.exists() {
+                        fs::rename(&gitai_file, &new_ai_file)?;
+                    }
+
+                    println!("{}", "Migration successfully Done".green(),);
+                }
+
+                // Add more migrations here as needed, e.g.:
+                // - Database schema changes
+                // - Config file format changes
+                // - File location changes
+            } else {
+                println!("Run with `--fix` to perform the following migrations:");
+                println!(
+                    "{}",
+                    "   - Move Database to the appropriate location".bright_magenta()
+                );
+                println!("{}", "   - Rename gitai.json to ai.json".bright_magenta());
+            }
+        }
         Commands::Completion { shell } => print_completions(shell, &mut Shelf::command())?,
     }
+
     Ok(())
 }

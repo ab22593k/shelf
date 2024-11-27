@@ -1,6 +1,10 @@
 //! Manages and suggests common configuration files.
 
 use anyhow::Result;
+use colored::Colorize;
+use rusqlite::Connection;
+
+use super::Dotfs;
 
 /// Collection of `Dotfile` suggestions organized by categories.
 pub struct Suggestions {
@@ -236,6 +240,29 @@ impl Suggestions {
 
         Ok(selected_files)
     }
+}
+
+pub(crate) async fn handle_fs_suggest(conn: &Connection, interactive: bool) -> Result<()> {
+    let suggestions = Suggestions::default();
+
+    if interactive {
+        match suggestions.interactive_selection() {
+            Ok(selected) => {
+                for path in selected {
+                    let expanded_path = shellexpand::tilde(&path).to_string();
+                    if let Ok(mut file) = Dotfs::from_file(expanded_path).await {
+                        if file.insert(conn).await.is_ok() {
+                            println!("{} {}", "Added:".green().bold(), path);
+                        }
+                    }
+                }
+            }
+            Err(e) => eprintln!("{} {}", "Selection failed:".red().bold(), e),
+        }
+    } else {
+        suggestions.print_suggestions();
+    }
+    Ok(())
 }
 
 #[cfg(test)]

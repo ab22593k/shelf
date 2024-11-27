@@ -2,11 +2,11 @@
 
 [![Shelf CI](https://github.com/ab22593k/shelf/actions/workflows/ci.yml/badge.svg)](https://github.com/ab22593k/shelf/actions/workflows/ci.yml)
 
-Shelf is a command-line tool for managing system files, generating git commit messages, and reviewing code
-using AI. It provides a simple interface to track files across your system and integrates
-with multiple AI providers to automatically generate meaningful commit messages through git hooks and perform
-comprehensive code reviews. With support for local and cloud-based AI models, Shelf makes configuration file
-management, git commits, and code reviews effortless.
+Shelf is a command-line tool for managing what we called `dotfile`s in the system, generating git commit
+messages, and reviewing code using AI. It provides a simple interface to track files across your system and
+integrates with multiple AI providers to automatically generate meaningful commit messages through git hooks
+and perform comprehensive code reviews. With support for local and cloud-based AI models, Shelf makes configuration
+files management, git commits, and code reviews effortless.
 
 ## Features
 
@@ -40,16 +40,16 @@ Shelf provides commands for both dotfile management and git integration:
 
 ```bash
 # Add a new dotfile to track
-shelf fs tarck ~/.bashrc
+shelf df tarck ~/.bashrc
 
 # List all tracked dotfiles
-shelf fs list
+shelf df list
 
 # Remove a dotfile from tracking
-shelf fs untarck ~/.bashrc
+shelf df untarck ~/.bashrc
 
 # Interactive selection of dotfiles to track
-shelf fs suggest -i
+shelf df suggest -i
 
 # Show help
 shelf --help
@@ -69,7 +69,7 @@ shelf ai commit
 shelf ai commit --install-hook
 
 # Remove git hook
-shelf ai commit --uninstal-hook
+shelf ai commit --remove-hook
 
 # Configure AI provider
 shelf ai config set provider openai
@@ -110,9 +110,6 @@ Shelf can assist in code review by analyzing pull requests and providing AI-powe
 # Review the current staged branch's changes
 shelf ai review
 
-# Review specific files
-shelf ai review path/to/file.rs
-
 # Review with specific provider
 shelf ai review -p openai
 ```
@@ -124,6 +121,27 @@ The AI review provides:
 - Security vulnerability scanning
 - Performance improvement suggestions
 - Best practice recommendations
+
+## Migration from v0.8.7 to newer versions
+
+If you're upgrading from a v0.8.7 version of Shelf, here are the key changes and migration steps:
+
+### Migration Steps
+
+1. Convert your existing config:
+```bash
+# Migration hints
+shelf migrate
+
+# Apply changes
+shelf migrate --fix
+```
+
+## Prompts
+
+Prompt templates for commit messages and code reviews are stored in the user's configuration directory.
+You can customize these templates to tailor the AI's output to your specific needs.
+
 
 ## Shell Completion
 
@@ -157,19 +175,19 @@ After setting up the completion script, restart your shell or source the respect
 
 ## Configuration
 
-GitAI settings are stored in `~/.config/shelf/gitai.json` (or `$XDG_CONFIG_HOME/shelf/gitai.json` if set). You can configure:
+AI settings are stored in `~/.config/shelf/ai.json` (or `$XDG_CONFIG_HOME/shelf/ai.json` if set). You can configure:
 
-- `provider`: AI provider to use (`ollama`, `openai`, `anthropic`, `gemini`, `groq` and `xai`)
-- `ollama_host`: Ollama server URL (default: `http://localhost:11434`)
-- `ollama_model`: Ollama model to use (default: `qwen2.5-coder`)
+- `provider`: AI provider to use (`openai`, `anthropic`, `gemini`, `groq`, `xai` and `ollama`)
+- `model`: Ollama model to use (default: `qwen2.5-coder`)
 - `openai_api_key`: OpenAI API key for GPT models
+- `ollama_host`: Ollama server URL (default: `http://localhost:11434`)
 
 Example configuration:
 ```json
 {
   "provider": "ollama",
-  "ollama_host": "http://localhost:11434",
-  "ollama_model": "qwen2.5-coder",
+  "model": "qwen2.5-coder",
+  "ollama_host": "http://localhost:11434" // Only if you are using custom host,
 }
 ```
 ## Development

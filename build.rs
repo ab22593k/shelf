@@ -1,17 +1,15 @@
-use std::env;
+use directories::BaseDirs;
 use std::fs;
 use std::io;
 use std::path::Path;
 
 fn main() -> Result<(), io::Error> {
-    // Get the XDG home directory
-    let home_dir = env::var("XDG_DATA_HOME").unwrap_or_else(|_| {
-        env::var("HOME").expect("Neither XDG_DATA_HOME nor HOME environment variable is set")
-            + "/.local/share"
-    });
+    let config_dir = BaseDirs::new()
+        .map(|base| base.config_dir().join("shelf"))
+        .expect("Could not create `shelf` config directory");
 
     // Your project-specific directory
-    let target_dir = Path::new(&home_dir).join("shelf/assets");
+    let target_dir = Path::new(&config_dir).join("assets");
 
     // Ensure the directory exists
     fs::create_dir_all(&target_dir)?;

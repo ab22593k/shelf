@@ -1,52 +1,66 @@
-use crate::ai::AIConfig;
+use crate::ai::provider::{ApiKey, OLLAMA_HOST};
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
+
 use std::{fs, io::Write, path::PathBuf};
 
+pub const AI_SETTINGS_FILENAME: &str = "ai.json";
+
+/// Represents configuration operations for the application.
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct ConfigOp {
-    path: PathBuf,
+pub struct ShelfConfig {
+    /// Path to the configuration file.
+    pub path: PathBuf,
+
+    /// AI configuration.
+    pub ai: AIProviderConfig,
 }
 
-impl ConfigOp {
-    pub fn get_path(self) -> PathBuf {
-        self.path
-    }
+impl Default for ShelfConfig {
+    fn default() -> Self {
+        let path = directories::BaseDirs::new()
+            .map(|base_dirs| base_dirs.config_dir().join("shelf"))
+            .expect("Could not create `shelf` configuration directory");
 
-    pub fn create_dotconf_db() -> Self {
         Self {
-            path: Self::config_home_dir().join("dotconf.db"),
+            path,
+            ai: AIProviderConfig::default(),
         }
     }
+}
 
-    pub fn create_ai_settings() -> PathBuf {
-        Self::config_home_dir().join("gitai.json")
-    }
-
-    pub fn load_config() -> Result<AIConfig> {
-        let config_path = Self::create_ai_settings();
-
-        if config_path.exists() {
-            let content = fs::read_to_string(&config_path).with_context(|| {
-                format!("Failed to read config file: {}", config_path.display())
+impl ShelfConfig {
+    /// Loads the AI configuration from the settings file.
+    ///
+    /// If the file exists, it attempts to deserialize the contents into an `AIConfig`.
+    /// If the file doesn't exist, it creates a default `AIConfig`, saves it to the file, and returns it.
+    pub fn read_all(&self) -> Result<AIProviderConfig> {
+        let ai_json_file = Self::default().path.join(AI_SETTINGS_FILENAME);
+        if ai_json_file.exists() {
+            let content = fs::read_to_string(&ai_json_file).with_context(|| {
+                format!("Failed to read config file: {}", ai_json_file.display())
             })?;
 
             serde_json::from_str(&content)
-                .with_context(|| format!("Failed to parse config file: {}", config_path.display()))
+                .with_context(|| format!("Failed to parse config file: {}", ai_json_file.display()))
         } else {
             // Create default config and save it
-            let config = AIConfig::default();
-            Self::save_config(&config)?;
+            let config = AIProviderConfig::default();
+            Self::write_all(&config)?;
             Ok(config)
         }
     }
 
-    pub fn save_config(config: &AIConfig) -> Result<()> {
-        let config_path = Self::create_ai_settings();
+    /// Saves the AI configuration to the settings file.
+    ///
+    /// Serializes the `config` to JSON and writes it to the file specified by `create_ai_settings()`.
+    /// Creates any necessary parent directories.
+    pub fn write_all(config: &AIProviderConfig) -> Result<()> {
+        let ai_json_file = Self::default().path.join(AI_SETTINGS_FILENAME);
 
         // Create parent directories if they don't exist
-        if let Some(parent) = config_path.parent() {
+        if let Some(parent) = ai_json_file.parent() {
             fs::create_dir_all(parent).with_context(|| {
                 format!("Failed to create config directory: {}", parent.display())
             })?;
@@ -55,26 +69,167 @@ impl ConfigOp {
         // Serialize and save config
         let content = serde_json::to_string_pretty(config).context("Failed to serialize config")?;
 
-        let mut file = fs::File::create(&config_path)
-            .with_context(|| format!("Failed to create config file: {}", config_path.display()))?;
+        let mut file = fs::File::create(&ai_json_file)
+            .with_context(|| format!("Failed to create config file: {}", ai_json_file.display()))?;
 
         file.write_all(content.as_bytes())
-            .with_context(|| format!("Failed to write config file: {}", config_path.display()))?;
+            .with_context(|| format!("Failed to write config file: {}", ai_json_file.display()))?;
 
         Ok(())
     }
+}
 
-    fn config_home_dir() -> PathBuf {
-        let path = directories::BaseDirs::new()
-            .map(|base_dirs| base_dirs.config_dir().join("shelf"))
-            .or_else(|| {
-                std::env::var("XDG_CONFIG_HOME")
-                    .ok()
-                    .map(|x| PathBuf::from(x).join("shelf"))
-            })
-            .or_else(|| home::home_dir().map(|x| x.join(".config").join("shelf")))
-            .unwrap_or_else(|| std::env::current_dir().unwrap().join(".shelf"));
+/// Configuration for AI providers.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AIProviderConfig {
+    /// The name of the provider to use.
+    pub provider: String,
+    pub model: String,
+    pub openai_api_key: Option<ApiKey>,
+    pub anthropic_api_key: Option<ApiKey>,
+    pub gemini_api_key: Option<ApiKey>,
+    pub groq_api_key: Option<ApiKey>,
+    pub xai_api_key: Option<ApiKey>,
+    pub ollama_host: Option<String>,
+}
 
-        path
+/// Default configuration for AI providers. Uses XAI as default provider.
+impl Default for AIProviderConfig {
+    fn default() -> Self {
+        Self {
+            provider: "xai".to_string(),
+            model: "grok-beta".to_string(),
+            openai_api_key: None,
+            anthropic_api_key: None,
+            gemini_api_key: None,
+            groq_api_key: None,
+            xai_api_key: None,
+            ollama_host: Some(OLLAMA_HOST.to_string()),
+        }
+    }
+}
+
+impl AIProviderConfig {
+    /// Set a configuration value.
+    pub fn set(&mut self, key: &str, value: &str) -> Result<()> {
+        match key {
+            "provider" => self.provider = value.to_string(),
+            "model" => self.model = value.to_string(),
+            "openai_api_key" => self.openai_api_key = Some(ApiKey::new(value)),
+            "anthropic_api_key" => self.anthropic_api_key = Some(ApiKey::new(value)),
+            "gemini_api_key" => self.gemini_api_key = Some(ApiKey::new(value)),
+            "groq_api_key" => self.groq_api_key = Some(ApiKey::new(value)),
+            "xai_api_key" => self.xai_api_key = Some(ApiKey::new(value)),
+            "ollama_host" => self.ollama_host = Some(value.to_string()),
+            _ => return Err(anyhow!("Unknown config key: {}", key)),
+        }
+        Ok(())
+    }
+
+    /// Get a configuration value.
+    pub fn get(&self, key: &str) -> Option<String> {
+        match key {
+            "provider" => Some(self.provider.clone()),
+            "model" => Some(self.model.clone()),
+            "openai_api_key" => self.openai_api_key.as_ref().map(|k| k.as_str().to_string()),
+            "anthropic_api_key" => self
+                .anthropic_api_key
+                .as_ref()
+                .map(|k| k.as_str().to_string()),
+            "gemini_api_key" => self.gemini_api_key.as_ref().map(|k| k.as_str().to_string()),
+            "groq_api_key" => self.groq_api_key.as_ref().map(|k| k.as_str().to_string()),
+            "xai_api_key" => self.xai_api_key.as_ref().map(|k| k.as_str().to_string()),
+            "ollama_host" => self.ollama_host.clone(),
+            _ => None,
+        }
+    }
+
+    /// Save the AI configuration to the config file.
+    pub async fn write_all(&self) -> Result<()> {
+        ShelfConfig::write_all(self)
+    }
+
+    /// List all configuration values.
+    pub fn list(&self) -> Vec<(&str, String)> {
+        let mut items = vec![
+            ("provider", self.provider.clone()),
+            ("model", self.model.clone()),
+        ];
+
+        if let Some(key) = &self.openai_api_key {
+            items.push(("openai_api_key", key.clone().into_inner()));
+        }
+        if let Some(key) = &self.anthropic_api_key {
+            items.push(("anthropic_api_key", key.clone().to_string()));
+        }
+        if let Some(key) = &self.gemini_api_key {
+            items.push(("gemini_api_key", key.clone().to_string()));
+        }
+        if let Some(key) = &self.groq_api_key {
+            items.push(("groq_api_key", key.clone().to_string()));
+        }
+        if let Some(key) = &self.xai_api_key {
+            items.push(("xai_api_key", key.clone().to_string()));
+        }
+        if let Some(host) = &self.ollama_host {
+            items.push(("ollama_host", host.clone()));
+        }
+
+        items
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn test_default_config_path_linux() {
+        let temp_dir = tempdir().unwrap();
+
+        // Set XDG_CONFIG_HOME to a temporary directory
+        std::env::set_var("XDG_CONFIG_HOME", temp_dir.path());
+
+        let config = ShelfConfig::default();
+        let expected_path = temp_dir.path().join("shelf");
+        assert_eq!(config.path, expected_path);
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn test_default_config_path_macos() {
+        use std::env;
+
+        let temp_home = tempdir().unwrap();
+        env::set_var("HOME", temp_home.path());
+
+        let config = ShelfConfig::default();
+        let expected_path = temp_home
+            .path()
+            .join("Library")
+            .join("Application Support")
+            .join("shelf");
+
+        assert_eq!(config.path, expected_path);
+    }
+
+    #[test]
+    fn test_config_operations() {
+        let temp_dir = tempdir().unwrap();
+        std::env::set_var("XDG_CONFIG_HOME", temp_dir.path());
+
+        let mut config = AIProviderConfig::default();
+
+        // Test setting values
+        config.set("provider", "openai").unwrap();
+        config.set("model", "gpt-4").unwrap();
+        assert_eq!(config.get("provider"), Some("openai".to_string()));
+        assert_eq!(config.get("model"), Some("gpt-4".to_string()));
+
+        // Test invalid key
+        assert!(config.set("invalid_key", "value").is_err());
+        assert_eq!(config.get("invalid_key"), None);
     }
 }

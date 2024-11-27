@@ -1,7 +1,9 @@
+pub mod op;
 pub mod suggest;
 
 use anyhow::{anyhow, Result};
 use rusqlite::Connection;
+use tokio::fs;
 
 use std::{
     path::{Path, PathBuf},
@@ -10,13 +12,13 @@ use std::{
 
 /// Represents a dotfile and its metadata.
 #[derive(Debug, Clone)]
-pub struct Fs {
+pub struct Dotfs {
     path: PathBuf,
     content: String,
     inserted: SystemTime,
 }
 
-impl Fs {
+impl Dotfs {
     pub fn new(path: PathBuf, content: String, inserted: SystemTime) -> Self {
         Self {
             path,
@@ -32,11 +34,11 @@ impl Fs {
     /// Creates a new `Dotfile` instance from disk.
     pub async fn from_file(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
-        let content = tokio::fs::read_to_string(path)
+        let content = fs::read_to_string(path)
             .await
             .map_err(|e| anyhow!("Failed to read file {}: {}", path.display(), e))?;
 
-        let metadata = tokio::fs::metadata(path)
+        let metadata = fs::metadata(path)
             .await
             .map_err(|e| anyhow!("Failed to read metadata for {}: {}", path.display(), e))?;
 
@@ -112,11 +114,11 @@ impl Fs {
                 )
             })?;
 
-        tokio::fs::write(&self.path, &content)
+        fs::write(&self.path, &content)
             .await
             .map_err(|e| anyhow!("Failed to write file {}: {}", self.path.display(), e))?;
 
-        let metadata = tokio::fs::metadata(&self.path)
+        let metadata = fs::metadata(&self.path)
             .await
             .map_err(|e| anyhow!("Failed to read metadata for {}: {}", self.path.display(), e))?;
 
@@ -160,7 +162,7 @@ mod tests {
         let content = "test content".to_string();
         let time = SystemTime::now();
 
-        let conf = Fs::new(path.clone(), content.clone(), time);
+        let conf = Dotfs::new(path.clone(), content.clone(), time);
 
         assert_eq!(conf.path, path, "Path should match exactly");
         assert_eq!(conf.content, content, "Content should match exactly");
@@ -172,7 +174,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_path() -> Result<()> {
         let path = PathBuf::from("test/path");
-        let conf = Fs::new(path.clone(), "content".to_string(), SystemTime::now());
+        let conf = Dotfs::new(path.clone(), "content".to_string(), SystemTime::now());
 
         assert_eq!(
             conf.get_path(),
@@ -193,14 +195,14 @@ mod tests {
             ["test/path", "test content", &1630000000.to_string()],
         )?;
 
-        let result = Fs::select(&conn, "test/path").await?;
+        let result = Dotfs::select(&conn, "test/path").await?;
 
         assert_eq!(result.path.to_string_lossy(), "test/path");
         assert_eq!(result.content, "test content");
         assert_eq!(result.inserted, test_time);
 
         // Test non-existent path
-        assert!(Fs::select(&conn, "nonexistent").await.is_err());
+        assert!(Dotfs::select(&conn, "nonexistent").await.is_err());
 
         Ok(())
     }
@@ -210,7 +212,7 @@ mod tests {
         let conn = setup_db().await?;
         let test_time = SystemTime::UNIX_EPOCH + Duration::from_secs(1630000000);
 
-        let mut conf = Fs::new(
+        let mut conf = Dotfs::new(
             PathBuf::from("test/path"),
             "initial content".to_string(),
             test_time,
@@ -220,7 +222,7 @@ mod tests {
         conf.insert(&conn).await?;
 
         // Verify insert
-        let saved = Fs::select(&conn, "test/path").await?;
+        let saved = Dotfs::select(&conn, "test/path").await?;
         assert_eq!(saved.content, "initial content");
 
         // Test update
@@ -228,7 +230,7 @@ mod tests {
         conf.insert(&conn).await?;
 
         // Verify update
-        let updated = Fs::select(&conn, "test/path").await?;
+        let updated = Dotfs::select(&conn, "test/path").await?;
         assert_eq!(updated.content, "updated content");
 
         Ok(())
@@ -245,16 +247,16 @@ mod tests {
         )?;
 
         // Verify insertion
-        assert!(Fs::select(&conn, "test/path").await.is_ok());
+        assert!(Dotfs::select(&conn, "test/path").await.is_ok());
 
         // Test deletion
-        Fs::remove(&conn, "test/path").await?;
+        Dotfs::remove(&conn, "test/path").await?;
 
         // Verify deletion
-        assert!(Fs::select(&conn, "test/path").await.is_err());
+        assert!(Dotfs::select(&conn, "test/path").await.is_err());
 
         // Test deleting non-existent entry (should not error)
-        assert!(Fs::remove(&conn, "nonexistent").await.is_ok());
+        assert!(Dotfs::remove(&conn, "nonexistent").await.is_ok());
 
         Ok(())
     }
@@ -264,11 +266,11 @@ mod tests {
         let conn = setup_db().await?;
         let test_time = SystemTime::UNIX_EPOCH + Duration::from_secs(1630000000);
 
-        let mut conf = Fs::new(PathBuf::from("test/path"), "content".to_string(), test_time);
+        let mut conf = Dotfs::new(PathBuf::from("test/path"), "content".to_string(), test_time);
 
         conf.insert(&conn).await?;
 
-        let loaded = Fs::select(&conn, "test/path").await?;
+        let loaded = Dotfs::select(&conn, "test/path").await?;
 
         let time_diff = loaded
             .inserted
@@ -292,7 +294,7 @@ mod tests {
         // Insert multiple test entries
         let paths = ["test/path1", "test/path2", "test/path3"];
         for path in paths.iter() {
-            let mut conf = Fs::new(
+            let mut conf = Dotfs::new(
                 PathBuf::from(path),
                 format!("content for {}", path),
                 test_time,
@@ -302,22 +304,22 @@ mod tests {
 
         // Verify all entries were inserted
         for path in paths.iter() {
-            let conf = Fs::select(&conn, path).await?;
+            let conf = Dotfs::select(&conn, path).await?;
             assert_eq!(conf.content, format!("content for {}", path));
         }
 
         // Delete multiple entries
         for path in &paths[0..2] {
-            Fs::remove(&conn, path).await?;
+            Dotfs::remove(&conn, path).await?;
         }
 
         // Verify deleted entries are gone
         for path in &paths[0..2] {
-            assert!(Fs::select(&conn, path).await.is_err());
+            assert!(Dotfs::select(&conn, path).await.is_err());
         }
 
         // Verify remaining entry still exists
-        let remaining = Fs::select(&conn, &paths[2]).await?;
+        let remaining = Dotfs::select(&conn, &paths[2]).await?;
         assert_eq!(remaining.content, format!("content for {}", paths[2]));
 
         Ok(())
@@ -337,7 +339,7 @@ mod tests {
         ];
 
         for path in dir_paths.iter() {
-            let mut conf = Fs::new(
+            let mut conf = Dotfs::new(
                 PathBuf::from(path),
                 format!("content for {}", path),
                 test_time,
@@ -347,22 +349,22 @@ mod tests {
 
         // Verify all entries exist
         for path in dir_paths.iter() {
-            let conf = Fs::select(&conn, path).await?;
+            let conf = Dotfs::select(&conn, path).await?;
             assert_eq!(conf.content, format!("content for {}", path));
         }
 
         // Delete entire directory
         for entry in dir_paths.iter().filter(|p| p.starts_with("test/dir1")) {
-            Fs::remove(&conn, entry).await?;
+            Dotfs::remove(&conn, entry).await?;
         }
 
         // Verify dir1 entries are deleted
         for entry in dir_paths.iter().filter(|p| p.starts_with("test/dir1")) {
-            assert!(Fs::select(&conn, entry).await.is_err());
+            assert!(Dotfs::select(&conn, entry).await.is_err());
         }
 
         // Verify dir2 entry still exists
-        let remaining = Fs::select(&conn, "test/dir2/file1").await?;
+        let remaining = Dotfs::select(&conn, "test/dir2/file1").await?;
         assert_eq!(remaining.content, "content for test/dir2/file1");
 
         Ok(())
@@ -381,7 +383,7 @@ mod tests {
 
         // Create initial config and save to DB
         let initial_content = "initial content".to_string();
-        let mut conf = Fs::new(test_path.clone(), initial_content.clone(), test_time);
+        let mut conf = Dotfs::new(test_path.clone(), initial_content.clone(), test_time);
         conf.insert(&conn).await?;
 
         // Write different content to file

@@ -14,15 +14,25 @@ pub struct Shelf {
 #[derive(Subcommand)]
 pub enum Commands {
     #[command(about = "Manage system dotfiles")]
-    FS {
+    Df {
         #[command(subcommand)]
-        actions: FsAction,
+        actions: DfAction,
     },
 
     #[command(about = "AI assistance")]
-    AI {
+    Ai {
         #[command(subcommand)]
         actions: AIAction,
+    },
+
+    #[command(about = "Automatically fix breakings changes")]
+    Migrate {
+        #[arg(
+            short,
+            long,
+            help = "Apply migration, if set to false, it will only show what would happen"
+        )]
+        fix: bool,
     },
 
     #[command(about = "Generate shell completion scripts")]
@@ -33,7 +43,7 @@ pub enum Commands {
 }
 
 #[derive(Subcommand)]
-pub enum FsAction {
+pub enum DfAction {
     #[command(about = "Create a dotfiles copy")]
     Track {
         paths: Vec<PathBuf>,
@@ -81,19 +91,14 @@ Can also install/remove a git hook for automated message generation"
             value_parser = ["groq", "xai", "gemini", "anthropic", "openai", "ollama"])]
         provider: Option<String>,
 
-        #[arg(
-            name = "hook-install",
-            long,
-            help = "Install the prepare-commit-msg hook"
-        )]
-        hooki: bool,
+        #[arg(short, long, help = "Override the configured model")]
+        model: Option<String>,
 
-        #[arg(
-            name = "hook-remove",
-            long,
-            help = "Remove the prepare-commit-msg hook"
-        )]
-        hookr: bool,
+        #[arg(long, help = "Install the prepare-commit-msg hook")]
+        install_hook: bool,
+
+        #[arg(long, help = "Remove the prepare-commit-msg hook")]
+        remove_hook: bool,
     },
 
     #[command(
@@ -104,6 +109,9 @@ for code improvements, potential bugs, and best practices using AI"
     Review {
         #[arg(short, long, help = "Override the configured AI provider")]
         provider: Option<String>,
+
+        #[arg(short, long, help = "Override the configured model")]
+        model: Option<String>,
     },
 
     #[command(
@@ -129,7 +137,7 @@ pub enum AIConfigAction {
         #[arg(
             help = "Configuration key",
             value_enum,
-            value_parser = ["groq_api_key", "xai_api_key", "gemini_api_key", "anthropic_api_key", "openai_api_key"]
+            value_parser = ["provider", "model", "groq_api_key", "xai_api_key", "gemini_api_key", "anthropic_api_key", "openai_api_key"]
         )]
         key: String,
         #[arg(help = "Configuration value")]

@@ -75,3 +75,78 @@ impl HttpProvider {
             .to_string())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mockito::Server;
+    use tokio::runtime::Builder;
+
+    #[test]
+    fn test_make_request_xai() {
+        let mut server = Server::new();
+        let mock = server
+            .mock("POST", "/")
+            .with_status(200)
+            .with_body(r#"{"choices": [{"message": {"content": "test response"}}]}"#)
+            .create();
+
+        let provider = HttpProvider {
+            host: server.url(),
+            model: "test_model".to_string(),
+            headers: HeaderMap::new(),
+        };
+
+        Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let response = provider
+                    .make_request(ProviderKind::Xai, "system_prompt", "user_prompt", 0.5, 0.5)
+                    .await
+                    .unwrap();
+
+                assert_eq!(response, "test response");
+                mock.assert();
+            });
+
+        mock.assert();
+    }
+
+    #[test]
+    fn test_make_request_ollama() {
+        let mut server = Server::new();
+        let mock = server
+            .mock("POST", "/")
+            .with_status(200)
+            .with_body(r#"{"response": "test response"}"#)
+            .create();
+
+        let provider = HttpProvider {
+            host: server.url(),
+            model: "test_model".to_string(),
+            headers: HeaderMap::new(),
+        };
+
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let response = provider
+                    .make_request(
+                        ProviderKind::Ollama,
+                        "system_prompt",
+                        "user_prompt",
+                        0.5,
+                        0.5,
+                    )
+                    .await
+                    .unwrap();
+
+                assert_eq!(response, "test response");
+                mock.assert();
+            });
+    }
+}
