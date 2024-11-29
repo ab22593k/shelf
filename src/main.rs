@@ -4,22 +4,17 @@ mod config;
 mod df;
 mod spinner;
 
-use crate::{
-    ai::{
-        git::{get_diff_cached, install_git_hook, remove_git_hook},
-        prompt::PromptKind,
-        provider::create_provider,
-    },
-    config::ShelfConfig,
-};
+use crate::config::ShelfConfig;
 
+use ai::{handle_ai_commit, handle_ai_review};
 use anyhow::{Context, Result};
-use app::{AIAction, AIConfigAction, Commands, DfAction, Shelf};
+use app::{AIAction, Commands, DfAction, Shelf};
 use clap::{CommandFactory, Parser};
 use clap_complete::{generate, Generator};
 use colored::*;
+use config::handle_ai_config;
 use df::{
-    op::{handle_fs_list, handle_fs_track, handle_fs_untrack},
+    handler::{handle_fs_list, handle_fs_track, handle_fs_untrack},
     suggest::handle_fs_suggest,
 };
 use rusqlite::Connection;
@@ -45,106 +40,6 @@ async fn initialize_database(conn: &Connection) -> Result<()> {
     )
     .context("Failed to create table")?;
 
-    Ok(())
-}
-
-async fn handle_ai_commit(
-    app_conf: ShelfConfig,
-    provider_override: Option<String>,
-    model_override: Option<String>,
-    install_hook: bool,
-    remove_hook: bool,
-) -> Result<()> {
-    let repo = git2::Repository::open_from_env()?;
-    let hooks_dir = repo.path().join("hooks");
-
-    if install_hook {
-        return install_git_hook(&hooks_dir);
-    }
-
-    if remove_hook {
-        return remove_git_hook(&hooks_dir);
-    }
-
-    // let mut config = AI::load().await?;
-    let mut ai_config = app_conf.read_all()?;
-    if let Some(provider_name) = provider_override {
-        ai_config.provider = provider_name;
-    }
-    if let Some(model_name) = model_override {
-        ai_config.model = model_name;
-    }
-
-    let provider = create_provider(&ai_config)?;
-    let commit_msg = spinner::new(|| async {
-        let diff = get_diff_cached(".")?;
-        provider
-            .generate_assistant_message(PromptKind::Commit, &diff)
-            .await
-    })
-    .await?;
-
-    println!(
-        "{}\n{}",
-        "Generated commit message:".green().bold(),
-        commit_msg
-    );
-    Ok(())
-}
-
-async fn handle_ai_review(
-    configs: ShelfConfig,
-    provider_override: Option<String>,
-    model_override: Option<String>,
-) -> Result<()> {
-    let mut dd = configs.read_all()?;
-    if let Some(provider_name) = provider_override {
-        dd.provider = provider_name;
-    }
-    if let Some(model_name) = model_override {
-        dd.model = model_name;
-    }
-
-    let provider = create_provider(&dd)?;
-    let review = spinner::new(|| async {
-        let diff = get_diff_cached(".")?;
-        provider
-            .generate_assistant_message(PromptKind::Review, &diff)
-            .await
-    })
-    .await?;
-
-    println!("{}\n{}", "Code review:".green().bold(), review);
-    Ok(())
-}
-
-async fn handle_ai_config(ff: ShelfConfig, action: AIConfigAction) -> Result<()> {
-    match action {
-        AIConfigAction::Set { key, value } => {
-            let mut config = ff.read_all()?;
-            config.set(&key, &value)?;
-            config.write_all().await?;
-            println!("{} {} = {}", "Set:".green().bold(), key, value);
-        }
-
-        AIConfigAction::Get { key } => {
-            let config = ff.read_all()?;
-            if let Some(value) = config.get(&key) {
-                println!("{}", value);
-            } else {
-                println!("{} Key not found: {}", "Error:".red().bold(), key);
-            }
-        }
-
-        AIConfigAction::List => {
-            let config = ff.read_all()?;
-            println!("{}", "Configuration:".green().bold());
-            config
-                .list()
-                .iter()
-                .for_each(|(k, v)| println!("{} = {}", k, v));
-        }
-    }
     Ok(())
 }
 

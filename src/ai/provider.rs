@@ -188,7 +188,7 @@ macro_rules! impl_provider {
 impl_provider!(OpenAIProvider, "gpt-3.5-turbo");
 impl_provider!(AnthropicProvider, "claude-3.5-sonnet");
 impl_provider!(GeminiProvider, "gemini-1.5-pro");
-impl_provider!(GroqProvider, "llama-3.1-8b-instant");
+impl_provider!(GroqProvider, "mixtral-8x7b-32768");
 
 // HTTP-based providers
 pub struct XAIProvider {

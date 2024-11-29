@@ -8,11 +8,6 @@ use walkdir::WalkDir;
 
 use crate::df::Dotfs;
 
-// Helper function to format timestamps
-fn format_timestamp(timestamp: i64) -> DateTime<Utc> {
-    DateTime::<Utc>::from(UNIX_EPOCH + std::time::Duration::from_secs(timestamp as u64))
-}
-
 pub(crate) async fn handle_fs_list(conn: &Connection, modified: bool) -> Result<()> {
     let mut stmt = conn.prepare("SELECT path, content, last_modified FROM dotconf")?;
     let files = stmt
@@ -141,4 +136,9 @@ pub(crate) async fn handle_fs_track(
         }
     }
     Ok(())
+}
+
+// Helper function to format timestamps
+fn format_timestamp(timestamp: i64) -> DateTime<Utc> {
+    DateTime::<Utc>::from(UNIX_EPOCH + std::time::Duration::from_secs(timestamp as u64))
 }

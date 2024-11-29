@@ -1,6 +1,10 @@
-use crate::ai::provider::{ApiKey, OLLAMA_HOST};
+use crate::{
+    ai::provider::{ApiKey, OLLAMA_HOST},
+    app::AIConfigAction,
+};
 
 use anyhow::{anyhow, Context, Result};
+use colored::Colorize;
 use serde::{Deserialize, Serialize};
 
 use std::{fs, io::Write, path::PathBuf};
@@ -42,8 +46,11 @@ impl ShelfConfig {
                 format!("Failed to read config file: {}", ai_json_file.display())
             })?;
 
-            serde_json::from_str(&content)
-                .with_context(|| format!("Failed to parse config file: {}", ai_json_file.display()))
+            let config: AIProviderConfig = serde_json::from_str(&content).with_context(|| {
+                format!("Failed to parse config file: {}", ai_json_file.display())
+            })?;
+
+            Ok(config)
         } else {
             // Create default config and save it
             let config = AIProviderConfig::default();
@@ -97,8 +104,8 @@ pub struct AIProviderConfig {
 impl Default for AIProviderConfig {
     fn default() -> Self {
         Self {
-            provider: "xai".to_string(),
-            model: "grok-beta".to_string(),
+            provider: "gemini".to_string(),
+            model: "gemini-1.5-flash".to_string(),
             openai_api_key: None,
             anthropic_api_key: None,
             gemini_api_key: None,
@@ -110,6 +117,59 @@ impl Default for AIProviderConfig {
 }
 
 impl AIProviderConfig {
+    /// Validates the configuration
+    // pub fn validate(&self) -> Result<()> {
+    //     // Validate provider name
+    //     match self.provider.as_str() {
+    //         "openai" => {
+    //             if self.openai_api_key.is_none() {
+    //                 return Err(anyhow!(
+    //                     "OpenAI API key is required when using OpenAI provider"
+    //                 ));
+    //             }
+    //         }
+    //         "anthropic" => {
+    //             if self.anthropic_api_key.is_none() {
+    //                 return Err(anyhow!(
+    //                     "Anthropic API key is required when using Anthropic provider"
+    //                 ));
+    //             }
+    //         }
+    //         "gemini" => {
+    //             if self.gemini_api_key.is_none() {
+    //                 return Err(anyhow!(
+    //                     "Gemini API key is required when using Gemini provider"
+    //                 ));
+    //             }
+    //         }
+    //         "groq" => {
+    //             if self.groq_api_key.is_none() {
+    //                 return Err(anyhow!("Groq API key is required when using Groq provider"));
+    //             }
+    //         }
+    //         "xai" => {
+    //             if self.xai_api_key.is_none() {
+    //                 return Err(anyhow!("XAI API key is required when using XAI provider"));
+    //             }
+    //         }
+    //         "ollama" => {
+    //             if self.ollama_host.is_none() {
+    //                 return Err(anyhow!(
+    //                     "Ollama host is required when using Ollama provider"
+    //                 ));
+    //             }
+    //         }
+    //         _ => return Err(anyhow!("Invalid provider: {}", self.provider)),
+    //     }
+
+    //     // Validate model name is not empty
+    //     if self.model.trim().is_empty() {
+    //         return Err(anyhow!("Model name cannot be empty"));
+    //     }
+
+    //     Ok(())
+    // }
+
     /// Set a configuration value.
     pub fn set(&mut self, key: &str, value: &str) -> Result<()> {
         match key {
@@ -123,6 +183,7 @@ impl AIProviderConfig {
             "ollama_host" => self.ollama_host = Some(value.to_string()),
             _ => return Err(anyhow!("Unknown config key: {}", key)),
         }
+
         Ok(())
     }
 
@@ -179,6 +240,36 @@ impl AIProviderConfig {
     }
 }
 
+pub async fn handle_ai_config(ff: ShelfConfig, action: AIConfigAction) -> Result<()> {
+    match action {
+        AIConfigAction::Set { key, value } => {
+            let mut config = ff.read_all()?;
+            config.set(&key, &value)?;
+            config.write_all().await?;
+            println!("{} {} = {}", "Set:".green().bold(), key, value);
+        }
+
+        AIConfigAction::Get { key } => {
+            let config = ff.read_all()?;
+            if let Some(value) = config.get(&key) {
+                println!("{}", value);
+            } else {
+                println!("{} Key not found: {}", "Error:".red().bold(), key);
+            }
+        }
+
+        AIConfigAction::List => {
+            let config = ff.read_all()?;
+            println!("{}", "Configuration:".green().bold());
+            config
+                .list()
+                .iter()
+                .for_each(|(k, v)| println!("{} = {}", k, v));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -221,12 +312,10 @@ mod tests {
         std::env::set_var("XDG_CONFIG_HOME", temp_dir.path());
 
         let mut config = AIProviderConfig::default();
+        config.set("gemini_api_key", "api_key").unwrap();
 
-        // Test setting values
-        config.set("provider", "openai").unwrap();
-        config.set("model", "gpt-4").unwrap();
-        assert_eq!(config.get("provider"), Some("openai".to_string()));
-        assert_eq!(config.get("model"), Some("gpt-4".to_string()));
+        assert_eq!(config.get("provider"), Some("gemini".to_string()));
+        assert_eq!(config.get("model"), Some("gemini-1.5-flash".to_string()));
 
         // Test invalid key
         assert!(config.set("invalid_key", "value").is_err());

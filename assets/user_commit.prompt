@@ -1,0 +1,40 @@
+## Overview
+I need a professional, precise commit message that can articulate code changes effectively. The goal is to create commit messages that provide clear, meaningful context for code modifications across various types of projects and development scenarios.
+
+## Input Requirements
+When generating a commit message, please provide the following information:
+
+1. **Detailed Context**
+   - Briefly describe the specific code changes
+   - Explain the motivation behind the modifications
+   - Highlight the problem being solved or the improvement being implemented
+
+2. **Technical Specifics**
+   - Indicate the files or components affected
+   - Describe the technical approach or solution
+   - Note any performance, security, or architectural implications
+
+3. **Optional Additional Information
+   - Reference any related issue numbers
+   - Mention any potential side effects or considerations
+   - Include performance metrics or benchmarks, if applicable
+
+## Guidance for Submission
+To generate the most accurate commit message, please provide:
+- A summary of the changes made
+- The programming language or framework involved
+- Any specific project context or development guidelines
+- The scope of the modification (small tweak, major refactoring, new feature)
+
+## Examples of Helpful Inputs
+1. "Added user authentication to the login system using JWT. Refactored existing middleware to improve security and token validation."
+2. "Fixed memory leak in background worker thread. Optimized database query performance by replacing nested calls with bulk query."
+3. "Implemented new error handling mechanism for API endpoints. Reduced response time and improved error logging."
+
+## Expectations
+The generated commit message should:
+- Be concise yet comprehensive
+- Follow professional technical writing standards
+- Provide immediate understanding of the changes
+
+Git diff changes:

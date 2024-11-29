@@ -1,42 +1,50 @@
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use std::fs;
+
+use std::fmt;
 
 pub enum PromptKind {
     Commit,
     Review,
 }
 
+impl fmt::Display for PromptKind {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            PromptKind::Commit => write!(f, "commit.prompt"),
+            PromptKind::Review => write!(f, "review.prompt"),
+        }
+    }
+}
+
+macro_rules! prompt_path {
+    (user, $kind:expr) => {
+        format!("assets/user_{}", $kind)
+    };
+    (system, $kind:expr) => {
+        format!("assets/system_{}", $kind)
+    };
+}
+
 impl PromptKind {
-    pub fn get_user_prompt(&self) -> Result<String> {
-        self.load_prompt("assets/user")
-    }
-
     pub fn get_system_prompt(&self) -> Result<String> {
-        self.load_prompt("assets/system")
+        load_prompt_from_path(&prompt_path!(system, self))
     }
 
-    fn load_prompt(&self, base_path: &str) -> Result<String> {
-        let path = match self {
-            PromptKind::Commit => base_path.to_owned() + "/commit.txt",
-            PromptKind::Review => base_path.to_owned() + "/review.txt",
-        };
-
-        load_prompt_from_path(&path)
+    pub fn get_user_prompt(self) -> Result<String> {
+        load_prompt_from_path(&prompt_path!(user, self))
     }
 }
 
 fn load_prompt_from_path(path: &str) -> Result<String> {
     let config_dir = directories::BaseDirs::new()
         .map(|p| p.config_dir().join("shelf").join(path))
-        .ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "Could not determine data directory",
-            )
-        })?;
+        .ok_or_else(|| anyhow!("Could not determine data directory"))?;
 
-    Ok(fs::read_to_string(config_dir)
-        .map_err(|e| std::io::Error::new(e.kind(), format!("Failed to read prompt file: {}", e)))?)
+    match fs::read_to_string(&config_dir) {
+        Ok(content) => Ok(content),
+        Err(e) => Err(anyhow!("Failed to read prompt file {}", path).context(e)),
+    }
 }
 
 #[cfg(test)]
