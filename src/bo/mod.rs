@@ -12,13 +12,13 @@ use std::{
 
 /// Represents a dotfile and its metadata.
 #[derive(Debug, Clone)]
-pub struct Book {
+pub struct Books {
     path: PathBuf,
     content: String,
     inserted: SystemTime,
 }
 
-impl Book {
+impl Books {
     pub fn new(path: PathBuf, content: String, inserted: SystemTime) -> Self {
         Self {
             path,
@@ -162,7 +162,7 @@ mod tests {
         let content = "test content".to_string();
         let time = SystemTime::now();
 
-        let conf = Book::new(path.clone(), content.clone(), time);
+        let conf = Books::new(path.clone(), content.clone(), time);
 
         assert_eq!(conf.path, path, "Path should match exactly");
         assert_eq!(conf.content, content, "Content should match exactly");
@@ -174,7 +174,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_path() -> Result<()> {
         let path = PathBuf::from("test/path");
-        let conf = Book::new(path.clone(), "content".to_string(), SystemTime::now());
+        let conf = Books::new(path.clone(), "content".to_string(), SystemTime::now());
 
         assert_eq!(
             conf.get_path(),
@@ -195,14 +195,14 @@ mod tests {
             ["test/path", "test content", &1630000000.to_string()],
         )?;
 
-        let result = Book::select(&conn, "test/path").await?;
+        let result = Books::select(&conn, "test/path").await?;
 
         assert_eq!(result.path.to_string_lossy(), "test/path");
         assert_eq!(result.content, "test content");
         assert_eq!(result.inserted, test_time);
 
         // Test non-existent path
-        assert!(Book::select(&conn, "nonexistent").await.is_err());
+        assert!(Books::select(&conn, "nonexistent").await.is_err());
 
         Ok(())
     }
@@ -212,7 +212,7 @@ mod tests {
         let conn = setup_db().await?;
         let test_time = SystemTime::UNIX_EPOCH + Duration::from_secs(1630000000);
 
-        let mut conf = Book::new(
+        let mut conf = Books::new(
             PathBuf::from("test/path"),
             "initial content".to_string(),
             test_time,
@@ -222,7 +222,7 @@ mod tests {
         conf.insert(&conn).await?;
 
         // Verify insert
-        let saved = Book::select(&conn, "test/path").await?;
+        let saved = Books::select(&conn, "test/path").await?;
         assert_eq!(saved.content, "initial content");
 
         // Test update
@@ -230,7 +230,7 @@ mod tests {
         conf.insert(&conn).await?;
 
         // Verify update
-        let updated = Book::select(&conn, "test/path").await?;
+        let updated = Books::select(&conn, "test/path").await?;
         assert_eq!(updated.content, "updated content");
 
         Ok(())
@@ -247,16 +247,16 @@ mod tests {
         )?;
 
         // Verify insertion
-        assert!(Book::select(&conn, "test/path").await.is_ok());
+        assert!(Books::select(&conn, "test/path").await.is_ok());
 
         // Test deletion
-        Book::remove(&conn, "test/path").await?;
+        Books::remove(&conn, "test/path").await?;
 
         // Verify deletion
-        assert!(Book::select(&conn, "test/path").await.is_err());
+        assert!(Books::select(&conn, "test/path").await.is_err());
 
         // Test deleting non-existent entry (should not error)
-        assert!(Book::remove(&conn, "nonexistent").await.is_ok());
+        assert!(Books::remove(&conn, "nonexistent").await.is_ok());
 
         Ok(())
     }
@@ -266,11 +266,11 @@ mod tests {
         let conn = setup_db().await?;
         let test_time = SystemTime::UNIX_EPOCH + Duration::from_secs(1630000000);
 
-        let mut conf = Book::new(PathBuf::from("test/path"), "content".to_string(), test_time);
+        let mut conf = Books::new(PathBuf::from("test/path"), "content".to_string(), test_time);
 
         conf.insert(&conn).await?;
 
-        let loaded = Book::select(&conn, "test/path").await?;
+        let loaded = Books::select(&conn, "test/path").await?;
 
         let time_diff = loaded
             .inserted
@@ -294,7 +294,7 @@ mod tests {
         // Insert multiple test entries
         let paths = ["test/path1", "test/path2", "test/path3"];
         for path in paths.iter() {
-            let mut conf = Book::new(
+            let mut conf = Books::new(
                 PathBuf::from(path),
                 format!("content for {}", path),
                 test_time,
@@ -304,22 +304,22 @@ mod tests {
 
         // Verify all entries were inserted
         for path in paths.iter() {
-            let conf = Book::select(&conn, path).await?;
+            let conf = Books::select(&conn, path).await?;
             assert_eq!(conf.content, format!("content for {}", path));
         }
 
         // Delete multiple entries
         for path in &paths[0..2] {
-            Book::remove(&conn, path).await?;
+            Books::remove(&conn, path).await?;
         }
 
         // Verify deleted entries are gone
         for path in &paths[0..2] {
-            assert!(Book::select(&conn, path).await.is_err());
+            assert!(Books::select(&conn, path).await.is_err());
         }
 
         // Verify remaining entry still exists
-        let remaining = Book::select(&conn, &paths[2]).await?;
+        let remaining = Books::select(&conn, &paths[2]).await?;
         assert_eq!(remaining.content, format!("content for {}", paths[2]));
 
         Ok(())
@@ -339,7 +339,7 @@ mod tests {
         ];
 
         for path in dir_paths.iter() {
-            let mut conf = Book::new(
+            let mut conf = Books::new(
                 PathBuf::from(path),
                 format!("content for {}", path),
                 test_time,
@@ -349,22 +349,22 @@ mod tests {
 
         // Verify all entries exist
         for path in dir_paths.iter() {
-            let conf = Book::select(&conn, path).await?;
+            let conf = Books::select(&conn, path).await?;
             assert_eq!(conf.content, format!("content for {}", path));
         }
 
         // Delete entire directory
         for entry in dir_paths.iter().filter(|p| p.starts_with("test/dir1")) {
-            Book::remove(&conn, entry).await?;
+            Books::remove(&conn, entry).await?;
         }
 
         // Verify dir1 entries are deleted
         for entry in dir_paths.iter().filter(|p| p.starts_with("test/dir1")) {
-            assert!(Book::select(&conn, entry).await.is_err());
+            assert!(Books::select(&conn, entry).await.is_err());
         }
 
         // Verify dir2 entry still exists
-        let remaining = Book::select(&conn, "test/dir2/file1").await?;
+        let remaining = Books::select(&conn, "test/dir2/file1").await?;
         assert_eq!(remaining.content, "content for test/dir2/file1");
 
         Ok(())
@@ -383,7 +383,7 @@ mod tests {
 
         // Create initial config and save to DB
         let initial_content = "initial content".to_string();
-        let mut conf = Book::new(test_path.clone(), initial_content.clone(), test_time);
+        let mut conf = Books::new(test_path.clone(), initial_content.clone(), test_time);
         conf.insert(&conn).await?;
 
         // Write different content to file

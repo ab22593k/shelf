@@ -10,7 +10,7 @@ use git::get_diff_cached;
 use prompt::PromptKind;
 use provider::create_provider;
 
-use crate::{config::ShelfConfig, spinner};
+use crate::{config::Config, spinner};
 
 /// Trait for AI providers.
 #[async_trait]
@@ -25,7 +25,7 @@ pub trait Provider: Send + Sync {
 }
 
 pub async fn handle_ai_commit(
-    app_conf: ShelfConfig,
+    app_conf: Config,
     provider_override: Option<String>,
     model_override: Option<String>,
 ) -> Result<()> {
@@ -56,7 +56,7 @@ pub async fn handle_ai_commit(
 }
 
 pub async fn handle_ai_review(
-    configs: ShelfConfig,
+    configs: Config,
     provider_override: Option<String>,
     model_override: Option<String>,
 ) -> Result<()> {

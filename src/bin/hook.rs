@@ -9,7 +9,7 @@ use clap::Parser;
 use colored::*;
 use shelf::{
     ai::{git::get_diff_cached, prompt::PromptKind, provider::create_provider},
-    config::ShelfConfig,
+    config::Config,
     spinner,
 };
 
@@ -52,7 +52,7 @@ struct Args {
     sha1: Option<String>,
 }
 
-async fn handle_commit(config: ShelfConfig, args: &Args) -> Result<()> {
+async fn handle_commit(config: Config, args: &Args) -> Result<()> {
     // Generate commit message from detailed diff
     let config = config.read_all()?;
     let provider = create_provider(&config)?;
@@ -88,7 +88,7 @@ async fn main() -> Result<()> {
         }
     }
 
-    if let Err(e) = handle_commit(ShelfConfig::default(), &args).await {
+    if let Err(e) = handle_commit(Config::default(), &args).await {
         eprintln!("{} {}", "Error:".red().bold(), e);
         exit(1);
     }

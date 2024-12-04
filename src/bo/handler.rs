@@ -1,4 +1,4 @@
-use crate::bo::Book;
+use crate::bo::Books;
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
@@ -77,8 +77,8 @@ pub(crate) async fn handle_fs_untrack(
                 .filter_map(Result::ok)
                 .filter(|e| e.path().is_file())
             {
-                if let Ok(dotconf) = Book::select(conn, entry.path()).await {
-                    Book::remove(conn, entry.path()).await?;
+                if let Ok(dotconf) = Books::select(conn, entry.path()).await {
+                    Books::remove(conn, entry.path()).await?;
                     println!(
                         "{} {}",
                         "Removed:".green().bold(),
@@ -86,8 +86,8 @@ pub(crate) async fn handle_fs_untrack(
                     );
                 }
             }
-        } else if let Ok(dotconf) = Book::select(conn, &base_path).await {
-            Book::remove(conn, &base_path).await?;
+        } else if let Ok(dotconf) = Books::select(conn, &base_path).await {
+            Books::remove(conn, &base_path).await?;
             println!(
                 "{} {}",
                 "Removed:".green().bold(),
@@ -116,21 +116,21 @@ pub(crate) async fn handle_fs_track(
             {
                 let path = entry.path();
                 if restore {
-                    if let Ok(mut dotconf) = Book::select(conn, path).await {
+                    if let Ok(mut dotconf) = Books::select(conn, path).await {
                         dotconf.restore(conn).await?;
                         println!("{} {:?}", "Restored:".green().bold(), path);
                     }
-                } else if let Ok(mut dotconf) = Book::from_file(path).await {
+                } else if let Ok(mut dotconf) = Books::from_file(path).await {
                     dotconf.insert(conn).await?;
                     println!("{} {:?}", "Tracked:".green().bold(), path);
                 }
             }
         } else if restore {
-            if let Ok(mut dotconf) = Book::select(conn, &base_path).await {
+            if let Ok(mut dotconf) = Books::select(conn, &base_path).await {
                 dotconf.restore(conn).await?;
                 println!("{} {:?}", "Restored:".green().bold(), base_path);
             }
-        } else if let Ok(mut dotconf) = Book::from_file(&base_path).await {
+        } else if let Ok(mut dotconf) = Books::from_file(&base_path).await {
             dotconf.insert(conn).await?;
             println!("{} {:?}", "Tracked:".green().bold(), base_path);
         }

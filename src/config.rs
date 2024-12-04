@@ -16,7 +16,7 @@ pub const AI_SETTINGS_FILENAME: &str = "ai.json";
 
 /// Represents configuration operations for the application.
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct ShelfConfig {
+pub struct Config {
     /// Path to the configuration file.
     pub path: PathBuf,
 
@@ -24,7 +24,7 @@ pub struct ShelfConfig {
     pub ai: AIProviderConfig,
 }
 
-impl Default for ShelfConfig {
+impl Default for Config {
     fn default() -> Self {
         let path = directories::BaseDirs::new()
             .map(|base_dirs| base_dirs.config_dir().join("shelf"))
@@ -37,7 +37,7 @@ impl Default for ShelfConfig {
     }
 }
 
-impl ShelfConfig {
+impl Config {
     /// Loads the AI configuration from the settings file.
     ///
     /// If the file exists, it attempts to deserialize the contents into an `AIConfig`.
@@ -157,7 +157,7 @@ impl AIProviderConfig {
 
     /// Save the AI configuration to the config file.
     pub async fn write_all(&self) -> Result<()> {
-        ShelfConfig::write_all(self)
+        Config::write_all(self)
     }
 
     /// List all configuration values.
@@ -190,7 +190,7 @@ impl AIProviderConfig {
     }
 }
 
-pub async fn handle_ai_config(config: ShelfConfig, action: AIConfigAction) -> Result<()> {
+pub async fn handle_ai_config(config: Config, action: AIConfigAction) -> Result<()> {
     let mut config = config.read_all()?;
     match action {
         AIConfigAction::Set { key, value } => {
@@ -258,7 +258,7 @@ mod tests {
         // Set XDG_CONFIG_HOME to a temporary directory
         std::env::set_var("XDG_CONFIG_HOME", temp_dir.path());
 
-        let config = ShelfConfig::default();
+        let config = Config::default();
         let expected_path = temp_dir.path().join("shelf");
         assert_eq!(config.path, expected_path);
     }
@@ -271,7 +271,7 @@ mod tests {
         let temp_home = tempdir().unwrap();
         env::set_var("HOME", temp_home.path());
 
-        let config = ShelfConfig::default();
+        let config = Config::default();
         let expected_path = temp_home
             .path()
             .join("Library")

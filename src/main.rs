@@ -4,7 +4,7 @@ mod bo;
 mod config;
 mod spinner;
 
-use crate::config::ShelfConfig;
+use crate::config::Config;
 
 use ai::{handle_ai_commit, handle_ai_review};
 use anyhow::{Context, Result};
@@ -46,7 +46,7 @@ async fn initialize_database(conn: &Connection) -> Result<()> {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Shelf::parse();
-    let config = ShelfConfig::default();
+    let config = Config::default();
     let storage_file = directories::BaseDirs::new()
         .map(|base| base.data_dir().join("shelf").join(DF_STORAGE_FILENAME))
         .expect("Could not create `shelf` data directory");
