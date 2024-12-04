@@ -93,12 +93,6 @@ Can also install/remove a git hook for automated message generation"
 
         #[arg(short, long, help = "Override the configured model")]
         model: Option<String>,
-
-        #[arg(long, help = "Install the prepare-commit-msg hook")]
-        install_hook: bool,
-
-        #[arg(long, help = "Remove the prepare-commit-msg hook")]
-        remove_hook: bool,
     },
 
     #[command(
@@ -150,6 +144,15 @@ pub enum AIConfigAction {
         key: String,
     },
 
-    #[command(name = "list", about = "List all configuration values")]
+    #[command(about = "List all configuration values")]
     List,
+
+    #[command(about = "[Un]Install commit message git hook")]
+    Hook {
+        #[arg(short, long, help = "Install the prepare-commit-msg hook")]
+        install: bool,
+
+        #[arg(short, long, help = "Uninstall the prepare-commit-msg hook")]
+        uninstall: bool,
+    },
 }

@@ -6,7 +6,7 @@ pub mod provider;
 use anyhow::Result;
 use async_trait::async_trait;
 use colored::Colorize;
-use git::{get_diff_cached, install_git_hook, remove_git_hook};
+use git::get_diff_cached;
 use prompt::PromptKind;
 use provider::create_provider;
 
@@ -28,20 +28,7 @@ pub async fn handle_ai_commit(
     app_conf: ShelfConfig,
     provider_override: Option<String>,
     model_override: Option<String>,
-    install_hook: bool,
-    remove_hook: bool,
 ) -> Result<()> {
-    let repo = git2::Repository::open_from_env()?;
-    let hooks_dir = repo.path().join("hooks");
-
-    if install_hook {
-        return install_git_hook(&hooks_dir);
-    }
-
-    if remove_hook {
-        return remove_git_hook(&hooks_dir);
-    }
-
     // let mut config = AI::load().await?;
     let mut ai_config = app_conf.read_all()?;
     if let Some(provider_name) = provider_override {

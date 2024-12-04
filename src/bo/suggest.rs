@@ -4,7 +4,7 @@ use anyhow::Result;
 use colored::Colorize;
 use rusqlite::Connection;
 
-use super::Dotfs;
+use super::Book;
 
 /// Collection of `Dotfile` suggestions organized by categories.
 pub struct Suggestions {
@@ -250,7 +250,7 @@ pub(crate) async fn handle_fs_suggest(conn: &Connection, interactive: bool) -> R
             Ok(selected) => {
                 for path in selected {
                     let expanded_path = shellexpand::tilde(&path).to_string();
-                    if let Ok(mut file) = Dotfs::from_file(expanded_path).await {
+                    if let Ok(mut file) = Book::from_file(expanded_path).await {
                         if file.insert(conn).await.is_ok() {
                             println!("{} {}", "Added:".green().bold(), path);
                         }

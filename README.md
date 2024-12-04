@@ -2,7 +2,7 @@
 
 [![Shelf CI](https://github.com/ab22593k/shelf/actions/workflows/ci.yml/badge.svg)](https://github.com/ab22593k/shelf/actions/workflows/ci.yml)
 
-Shelf is a command-line tool for managing what we called `dotfile`s in the system, generating git commit
+Shelf is a command-line tool for managing books or what we called `dotfile`s in the system, generating git commit
 messages, and reviewing code using AI. It provides a simple interface to track files across your system and
 integrates with multiple AI providers to automatically generate meaningful commit messages through git hooks
 and perform comprehensive code reviews. With support for local and cloud-based AI models, Shelf makes configuration
@@ -40,16 +40,16 @@ Shelf provides commands for both dotfile management and git integration:
 
 ```bash
 # Add a new dotfile to track
-shelf df tarck ~/.bashrc
+shelf bo tarck ~/.bashrc
 
 # List all tracked dotfiles
-shelf df list
+shelf bo list
 
 # Remove a dotfile from tracking
-shelf df untarck ~/.bashrc
+shelf bo untarck ~/.bashrc
 
 # Interactive selection of dotfiles to track
-shelf df suggest -i
+shelf bo suggest -i
 
 # Show help
 shelf --help
@@ -62,15 +62,6 @@ Each command can be run with `-h` or `--help` for more information.
 The `ai` subcommand provides AI-powered features:
 
 ```bash
-# Generate commit message for staged changes
-shelf ai commit
-
-# Install git hook for automatic message generation
-shelf ai commit --install-hook
-
-# Remove git hook
-shelf ai commit --remove-hook
-
 # Configure AI provider
 shelf ai config set provider openai
 shelf ai config set openai_api_key "your-api-key"
@@ -109,9 +100,6 @@ Shelf can assist in code review by analyzing pull requests and providing AI-powe
 ```bash
 # Review the current staged branch's changes
 shelf ai review
-
-# Review with specific provider
-shelf ai review -p openai
 ```
 
 The AI review provides:
@@ -187,7 +175,7 @@ Example configuration:
 {
   "provider": "ollama",
   "model": "qwen2.5-coder",
-  "ollama_host": "http://localhost:11434" // Only if you are using custom host,
+  "ollama_host": "http://localhost:11434" # Only if you are using custom host,
 }
 ```
 ## Development

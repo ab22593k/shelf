@@ -1,5 +1,8 @@
 use crate::{
-    ai::provider::{ApiKey, OLLAMA_HOST},
+    ai::{
+        git::{install_git_hook, remove_git_hook},
+        provider::{ApiKey, OLLAMA_HOST},
+    },
     app::AIConfigAction,
 };
 
@@ -117,59 +120,6 @@ impl Default for AIProviderConfig {
 }
 
 impl AIProviderConfig {
-    /// Validates the configuration
-    // pub fn validate(&self) -> Result<()> {
-    //     // Validate provider name
-    //     match self.provider.as_str() {
-    //         "openai" => {
-    //             if self.openai_api_key.is_none() {
-    //                 return Err(anyhow!(
-    //                     "OpenAI API key is required when using OpenAI provider"
-    //                 ));
-    //             }
-    //         }
-    //         "anthropic" => {
-    //             if self.anthropic_api_key.is_none() {
-    //                 return Err(anyhow!(
-    //                     "Anthropic API key is required when using Anthropic provider"
-    //                 ));
-    //             }
-    //         }
-    //         "gemini" => {
-    //             if self.gemini_api_key.is_none() {
-    //                 return Err(anyhow!(
-    //                     "Gemini API key is required when using Gemini provider"
-    //                 ));
-    //             }
-    //         }
-    //         "groq" => {
-    //             if self.groq_api_key.is_none() {
-    //                 return Err(anyhow!("Groq API key is required when using Groq provider"));
-    //             }
-    //         }
-    //         "xai" => {
-    //             if self.xai_api_key.is_none() {
-    //                 return Err(anyhow!("XAI API key is required when using XAI provider"));
-    //             }
-    //         }
-    //         "ollama" => {
-    //             if self.ollama_host.is_none() {
-    //                 return Err(anyhow!(
-    //                     "Ollama host is required when using Ollama provider"
-    //                 ));
-    //             }
-    //         }
-    //         _ => return Err(anyhow!("Invalid provider: {}", self.provider)),
-    //     }
-
-    //     // Validate model name is not empty
-    //     if self.model.trim().is_empty() {
-    //         return Err(anyhow!("Model name cannot be empty"));
-    //     }
-
-    //     Ok(())
-    // }
-
     /// Set a configuration value.
     pub fn set(&mut self, key: &str, value: &str) -> Result<()> {
         match key {
@@ -240,17 +190,16 @@ impl AIProviderConfig {
     }
 }
 
-pub async fn handle_ai_config(ff: ShelfConfig, action: AIConfigAction) -> Result<()> {
+pub async fn handle_ai_config(config: ShelfConfig, action: AIConfigAction) -> Result<()> {
+    let mut config = config.read_all()?;
     match action {
         AIConfigAction::Set { key, value } => {
-            let mut config = ff.read_all()?;
             config.set(&key, &value)?;
             config.write_all().await?;
             println!("{} {} = {}", "Set:".green().bold(), key, value);
         }
 
         AIConfigAction::Get { key } => {
-            let config = ff.read_all()?;
             if let Some(value) = config.get(&key) {
                 println!("{}", value);
             } else {
@@ -259,13 +208,39 @@ pub async fn handle_ai_config(ff: ShelfConfig, action: AIConfigAction) -> Result
         }
 
         AIConfigAction::List => {
-            let config = ff.read_all()?;
             println!("{}", "Configuration:".green().bold());
             config
                 .list()
                 .iter()
                 .for_each(|(k, v)| println!("{} = {}", k, v));
         }
+
+        AIConfigAction::Hook { install, uninstall } => match git2::Repository::open_from_env() {
+            Ok(repo) => {
+                let hooks_dir = repo.path().join("hooks");
+
+                if install {
+                    match install_git_hook(&hooks_dir) {
+                        Ok(_) => {}
+                        Err(e) => {
+                            eprintln!("{} Failed to install hook: {}", "Error:".red().bold(), e);
+                        }
+                    }
+                } else if uninstall {
+                    match remove_git_hook(&hooks_dir) {
+                        Ok(_) => {}
+                        Err(e) => {
+                            eprintln!("{} Failed to uninstall hook: {}", "Error:".red().bold(), e);
+                        }
+                    }
+                }
+            }
+            Err(e) => println!(
+                "{} Failed to open git repository: {}",
+                "Error:".red().bold(),
+                e
+            ),
+        },
     }
     Ok(())
 }

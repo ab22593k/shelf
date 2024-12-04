@@ -1,7 +1,7 @@
 mod ai;
 mod app;
+mod bo;
 mod config;
-mod df;
 mod spinner;
 
 use crate::config::ShelfConfig;
@@ -9,14 +9,14 @@ use crate::config::ShelfConfig;
 use ai::{handle_ai_commit, handle_ai_review};
 use anyhow::{Context, Result};
 use app::{AIAction, Commands, DfAction, Shelf};
+use bo::{
+    handler::{handle_fs_list, handle_fs_track, handle_fs_untrack},
+    suggest::handle_fs_suggest,
+};
 use clap::{CommandFactory, Parser};
 use clap_complete::{generate, Generator};
 use colored::*;
 use config::handle_ai_config;
-use df::{
-    handler::{handle_fs_list, handle_fs_track, handle_fs_untrack},
-    suggest::handle_fs_suggest,
-};
 use rusqlite::Connection;
 
 use std::{fs, io};
@@ -81,18 +81,7 @@ async fn main() -> Result<()> {
             AIAction::Commit {
                 provider: provider_override,
                 model: model_override,
-                install_hook,
-                remove_hook,
-            } => {
-                handle_ai_commit(
-                    config,
-                    provider_override,
-                    model_override,
-                    install_hook,
-                    remove_hook,
-                )
-                .await?
-            }
+            } => handle_ai_commit(config, provider_override, model_override).await?,
             AIAction::Review {
                 provider: provider_override,
                 model: model_override,
