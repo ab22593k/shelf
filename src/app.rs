@@ -13,10 +13,10 @@ pub struct Shelf {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    #[command(about = "Manage system dotfiles")]
-    Df {
+    #[command(about = "Manage system configuration files")]
+    Bo {
         #[command(subcommand)]
-        actions: DfAction,
+        actions: BoAction,
     },
 
     #[command(about = "AI assistance")]
@@ -43,19 +43,21 @@ pub enum Commands {
 }
 
 #[derive(Subcommand)]
-pub enum DfAction {
-    #[command(about = "Create a dotfiles copy")]
+pub enum BoAction {
+    #[command(about = "Create a system file copy")]
     Track {
         paths: Vec<PathBuf>,
 
-        #[arg(short, long)]
+        // #[arg(short, long, help = "Encrypt files content")]
+        // encrypt: bool,
+        #[arg(short, long, help = "Perform the operation recursively")]
         recursive: bool,
 
-        #[arg(long, help = "Copies dotfiles from database to the source location")]
+        #[arg(long, help = "Copy files content to the source location")]
         restore: bool,
     },
 
-    #[command(about = "Remove dotfiles from management")]
+    #[command(about = "Remove files from management")]
     Untrack {
         paths: Vec<PathBuf>,
 
@@ -63,13 +65,13 @@ pub enum DfAction {
         recursive: bool,
     },
 
-    #[command(about = "List all currently tracked dotfiles")]
+    #[command(about = "List all currently tracked files")]
     List {
-        #[arg(short, long, help = "List all modified dotfiles only")]
+        #[arg(short, long, help = "List all modified files only")]
         modified: bool,
     },
 
-    #[command(about = "Suggest commonly used dotfiles cross diffrent OS's")]
+    #[command(about = "Commonly used configuration files cross diffrent OS's")]
     Suggest {
         #[arg(short, long)]
         interactive: bool,
@@ -147,7 +149,7 @@ pub enum AIConfigAction {
     #[command(about = "List all configuration values")]
     List,
 
-    #[command(about = "[Un]Install commit message git hook")]
+    #[command(about = "Commit message git hook management")]
     Hook {
         #[arg(short, long, help = "Install the prepare-commit-msg hook")]
         install: bool,

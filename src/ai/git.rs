@@ -8,9 +8,14 @@ pub fn get_diff_cached<T: AsRef<Path>>(path: T) -> Result<String> {
     options.include_typechange_trees(true);
 
     let index = repo.index()?;
+
+    /* Get the tree of the HEAD commit */
     let head_tree = repo.head()?.peel_to_tree()?;
+
+    /* Calculate the diff between the HEAD tree and the index */
     let diff = repo.diff_tree_to_index(Some(&head_tree), Some(&index), Some(&mut options))?;
 
+    /* diff buffer */
     let mut diff_string = String::new();
     diff.print(git2::DiffFormat::Patch, |_delta, _hunk, line| {
         let content = match line.origin() {
@@ -30,7 +35,7 @@ pub fn install_git_hook(hooks_dir: &Path) -> Result<()> {
     let hook_path = hooks_dir.join("prepare-commit-msg");
     let current_exe = std::env::current_exe()?;
 
-    // Get the hook binary path relative to the current executable
+    /* Get the hook binary path relative to the current executable */
     let hook_binary = current_exe
         .parent()
         .ok_or_else(|| anyhow!("Cannot determine executable directory"))?

@@ -2,21 +2,21 @@
 
 [![Shelf CI](https://github.com/ab22593k/shelf/actions/workflows/ci.yml/badge.svg)](https://github.com/ab22593k/shelf/actions/workflows/ci.yml)
 
-Shelf is a command-line tool for managing books or what we called `dotfile`s in the system, generating git commit
-messages, and reviewing code using AI. It provides a simple interface to track files across your system and
-integrates with multiple AI providers to automatically generate meaningful commit messages through git hooks
-and perform comprehensive code reviews. With support for local and cloud-based AI models, Shelf makes configuration
-files management, git commits, and code reviews effortless.
+Shelf is a command-line tool for bookmarking configuration files in the system, generating git commit
+messages and reviewing code using AI.
+
+It provides a simple interface to track files across your system and integrates with multiple AI
+providers to automatically generate meaningful commit messages through git hooks and perform
+comprehensive code reviews. Shelf makes configuration files management, git commits messages and
+code reviews effortless.
 
 ## Features
 
-- Track dotfiles from anywhere in your file system recursively
-- List all tracked dotfiles
-- Remove dotfiles recursively from database
-- AI-powered git commit message generation with multiple providers:
-  - Groq
+- Track/Untrack/List configuration files from anywhere in your file system recursively
+- AI-powered git commit/review generation with multiple providers:
   - Google Gemini
   - Anthropic Claude
+  - Groq
   - OpenAI
   - Xai grok
   - Ollama (local)
@@ -36,7 +36,7 @@ cargo install --path .
 
 Shelf provides commands for both dotfile management and git integration:
 
-### Dotfile Management
+### Configuration files Management
 
 ```bash
 # Add a new dotfile to track
@@ -127,7 +127,9 @@ shelf migrate --fix
 
 ## Prompts
 
-Prompt templates for commit messages and code reviews are stored in the user's configuration directory.
+Prompt templates for commit messages and code reviews are stored in `$XDG_CONFIG_HOME/shelf`
+(or `~/.config/shelf` if `$XDG_CONFIG_HOME` is not set).
+
 You can customize these templates to tailor the AI's output to your specific needs.
 
 
@@ -196,7 +198,7 @@ To run the project directly without installing:
 cargo run --bin shelf -- [SUBCOMMAND]
 ```
 
-Replace `[SUBCOMMAND]` with the command you want to run, such as `dotfile` or `ai`.
+Replace `[SUBCOMMAND]` with the command you want to run, such as `bo` or `ai`.
 
 ## Contributing
 

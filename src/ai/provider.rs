@@ -2,7 +2,7 @@ use crate::config::AIProviderConfig;
 
 use super::{
     http::{HttpProvider, ProviderKind},
-    prompt::PromptKind,
+    prompt::SysPromptKind,
     Provider,
 };
 use anyhow::{anyhow, Result};
@@ -158,7 +158,7 @@ macro_rules! impl_provider {
         impl Provider for $provider {
             async fn generate_assistant_message(
                 &self,
-                prompt: PromptKind,
+                prompt: SysPromptKind,
                 diff: &str,
             ) -> Result<String> {
                 let (system_prompt, user_prompt) =
@@ -216,7 +216,11 @@ impl XAIProvider {
 
 #[async_trait]
 impl Provider for XAIProvider {
-    async fn generate_assistant_message(&self, prompt: PromptKind, diff: &str) -> Result<String> {
+    async fn generate_assistant_message(
+        &self,
+        prompt: SysPromptKind,
+        diff: &str,
+    ) -> Result<String> {
         self.provider
             .make_request(
                 ProviderKind::Xai,
@@ -250,7 +254,11 @@ impl OllamaProvider {
 
 #[async_trait]
 impl Provider for OllamaProvider {
-    async fn generate_assistant_message(&self, prompt: PromptKind, diff: &str) -> Result<String> {
+    async fn generate_assistant_message(
+        &self,
+        prompt: SysPromptKind,
+        diff: &str,
+    ) -> Result<String> {
         self.provider
             .make_request(
                 ProviderKind::Ollama,

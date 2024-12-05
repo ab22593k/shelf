@@ -1,4 +1,4 @@
-use crate::bo::Books;
+use crate::bo::Bo;
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
@@ -8,7 +8,7 @@ use walkdir::WalkDir;
 
 use std::{path::PathBuf, time::UNIX_EPOCH};
 
-pub(crate) async fn handle_fs_list(conn: &Connection, modified: bool) -> Result<()> {
+pub(crate) async fn handle_bo_list(conn: &Connection, modified: bool) -> Result<()> {
     let mut stmt = conn.prepare("SELECT path, content, last_modified FROM dotconf")?;
     let files = stmt
         .query_map([], |row| {
@@ -64,7 +64,7 @@ pub(crate) async fn handle_fs_list(conn: &Connection, modified: bool) -> Result<
     Ok(())
 }
 
-pub(crate) async fn handle_fs_untrack(
+pub(crate) async fn handle_bo_untrack(
     conn: &Connection,
     recursive: bool,
     paths: Vec<PathBuf>,
@@ -77,22 +77,14 @@ pub(crate) async fn handle_fs_untrack(
                 .filter_map(Result::ok)
                 .filter(|e| e.path().is_file())
             {
-                if let Ok(dotconf) = Books::select(conn, entry.path()).await {
-                    Books::remove(conn, entry.path()).await?;
-                    println!(
-                        "{} {}",
-                        "Removed:".green().bold(),
-                        dotconf.get_path().display()
-                    );
+                if let Ok(dotconf) = Bo::select(conn, entry.path()).await {
+                    Bo::remove(conn, entry.path()).await?;
+                    println!("{} {}", "Removed:".green().bold(), dotconf.path.display());
                 }
             }
-        } else if let Ok(dotconf) = Books::select(conn, &base_path).await {
-            Books::remove(conn, &base_path).await?;
-            println!(
-                "{} {}",
-                "Removed:".green().bold(),
-                dotconf.get_path().display()
-            );
+        } else if let Ok(dotconf) = Bo::select(conn, &base_path).await {
+            Bo::remove(conn, &base_path).await?;
+            println!("{} {}", "Removed:".green().bold(), dotconf.path.display());
         } else {
             eprintln!("{} No such file: {:?}", "Error:".red().bold(), base_path);
         }
@@ -100,7 +92,7 @@ pub(crate) async fn handle_fs_untrack(
     Ok(())
 }
 
-pub(crate) async fn handle_fs_track(
+pub(crate) async fn handle_bo_track(
     conn: &Connection,
     recursive: bool,
     restore: bool,
@@ -116,21 +108,21 @@ pub(crate) async fn handle_fs_track(
             {
                 let path = entry.path();
                 if restore {
-                    if let Ok(mut dotconf) = Books::select(conn, path).await {
+                    if let Ok(mut dotconf) = Bo::select(conn, path).await {
                         dotconf.restore(conn).await?;
                         println!("{} {:?}", "Restored:".green().bold(), path);
                     }
-                } else if let Ok(mut dotconf) = Books::from_file(path).await {
+                } else if let Ok(mut dotconf) = Bo::from_file(path).await {
                     dotconf.insert(conn).await?;
                     println!("{} {:?}", "Tracked:".green().bold(), path);
                 }
             }
         } else if restore {
-            if let Ok(mut dotconf) = Books::select(conn, &base_path).await {
+            if let Ok(mut dotconf) = Bo::select(conn, &base_path).await {
                 dotconf.restore(conn).await?;
                 println!("{} {:?}", "Restored:".green().bold(), base_path);
             }
-        } else if let Ok(mut dotconf) = Books::from_file(&base_path).await {
+        } else if let Ok(mut dotconf) = Bo::from_file(&base_path).await {
             dotconf.insert(conn).await?;
             println!("{} {:?}", "Tracked:".green().bold(), base_path);
         }

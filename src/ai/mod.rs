@@ -7,7 +7,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use colored::Colorize;
 use git::get_diff_cached;
-use prompt::PromptKind;
+use prompt::SysPromptKind;
 use provider::create_provider;
 
 use crate::{config::Config, spinner};
@@ -16,7 +16,8 @@ use crate::{config::Config, spinner};
 #[async_trait]
 pub trait Provider: Send + Sync {
     /// Generate a response from the AI model.
-    async fn generate_assistant_message(&self, prompt: PromptKind, diff: &str) -> Result<String>;
+    async fn generate_assistant_message(&self, prompt: SysPromptKind, diff: &str)
+        -> Result<String>;
 
     /// Format the user prompt with the diff.
     fn format_prompt(&self, prompt: &str, diff: &str) -> String {
@@ -42,7 +43,7 @@ pub async fn handle_ai_commit(
     let commit_msg = spinner::new(|| async {
         let diff = get_diff_cached(".")?;
         provider
-            .generate_assistant_message(PromptKind::Commit, &diff)
+            .generate_assistant_message(SysPromptKind::Commit, &diff)
             .await
     })
     .await?;
@@ -72,7 +73,7 @@ pub async fn handle_ai_review(
     let review = spinner::new(|| async {
         let diff = get_diff_cached(".")?;
         provider
-            .generate_assistant_message(PromptKind::Review, &diff)
+            .generate_assistant_message(SysPromptKind::Review, &diff)
             .await
     })
     .await?;

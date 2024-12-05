@@ -10,25 +10,31 @@ use std::{
     time::SystemTime,
 };
 
-/// Represents a dotfile and its metadata.
+/// Represents a system configuration file bookmark that tracks files in your
+/// home directory (or anywhere else) that need to be managed and kept in sync.
+///
+/// # Fields
+///
+/// * `path` - The filesystem path to the configuration file
+/// * `content` - The current file contents as a string
+/// * `inserted` - When this file was last synchronized
 #[derive(Debug, Clone)]
-pub struct Books {
-    path: PathBuf,
-    content: String,
+pub struct Bo {
+    /// Filesystem path to the tracked configuration file
+    pub path: PathBuf,
+    /// Current contents of the file as a string
+    pub(crate) content: String,
+    /// Timestamp when the file was last synchronized
     inserted: SystemTime,
 }
 
-impl Books {
+impl Bo {
     pub fn new(path: PathBuf, content: String, inserted: SystemTime) -> Self {
         Self {
             path,
             content,
             inserted,
         }
-    }
-
-    pub fn get_path(self) -> PathBuf {
-        self.path
     }
 
     /// Creates a new `Dotfile` instance from disk.
@@ -162,7 +168,7 @@ mod tests {
         let content = "test content".to_string();
         let time = SystemTime::now();
 
-        let conf = Books::new(path.clone(), content.clone(), time);
+        let conf = Bo::new(path.clone(), content.clone(), time);
 
         assert_eq!(conf.path, path, "Path should match exactly");
         assert_eq!(conf.content, content, "Content should match exactly");
@@ -174,13 +180,9 @@ mod tests {
     #[tokio::test]
     async fn test_get_path() -> Result<()> {
         let path = PathBuf::from("test/path");
-        let conf = Books::new(path.clone(), "content".to_string(), SystemTime::now());
+        let conf = Bo::new(path.clone(), "content".to_string(), SystemTime::now());
 
-        assert_eq!(
-            conf.get_path(),
-            path,
-            "get_path should return the original path"
-        );
+        assert_eq!(conf.path, path, "get_path should return the original path");
         Ok(())
     }
 
@@ -195,14 +197,14 @@ mod tests {
             ["test/path", "test content", &1630000000.to_string()],
         )?;
 
-        let result = Books::select(&conn, "test/path").await?;
+        let result = Bo::select(&conn, "test/path").await?;
 
         assert_eq!(result.path.to_string_lossy(), "test/path");
         assert_eq!(result.content, "test content");
         assert_eq!(result.inserted, test_time);
 
         // Test non-existent path
-        assert!(Books::select(&conn, "nonexistent").await.is_err());
+        assert!(Bo::select(&conn, "nonexistent").await.is_err());
 
         Ok(())
     }
@@ -212,7 +214,7 @@ mod tests {
         let conn = setup_db().await?;
         let test_time = SystemTime::UNIX_EPOCH + Duration::from_secs(1630000000);
 
-        let mut conf = Books::new(
+        let mut conf = Bo::new(
             PathBuf::from("test/path"),
             "initial content".to_string(),
             test_time,
@@ -222,7 +224,7 @@ mod tests {
         conf.insert(&conn).await?;
 
         // Verify insert
-        let saved = Books::select(&conn, "test/path").await?;
+        let saved = Bo::select(&conn, "test/path").await?;
         assert_eq!(saved.content, "initial content");
 
         // Test update
@@ -230,7 +232,7 @@ mod tests {
         conf.insert(&conn).await?;
 
         // Verify update
-        let updated = Books::select(&conn, "test/path").await?;
+        let updated = Bo::select(&conn, "test/path").await?;
         assert_eq!(updated.content, "updated content");
 
         Ok(())
@@ -247,16 +249,16 @@ mod tests {
         )?;
 
         // Verify insertion
-        assert!(Books::select(&conn, "test/path").await.is_ok());
+        assert!(Bo::select(&conn, "test/path").await.is_ok());
 
         // Test deletion
-        Books::remove(&conn, "test/path").await?;
+        Bo::remove(&conn, "test/path").await?;
 
         // Verify deletion
-        assert!(Books::select(&conn, "test/path").await.is_err());
+        assert!(Bo::select(&conn, "test/path").await.is_err());
 
         // Test deleting non-existent entry (should not error)
-        assert!(Books::remove(&conn, "nonexistent").await.is_ok());
+        assert!(Bo::remove(&conn, "nonexistent").await.is_ok());
 
         Ok(())
     }
@@ -266,11 +268,11 @@ mod tests {
         let conn = setup_db().await?;
         let test_time = SystemTime::UNIX_EPOCH + Duration::from_secs(1630000000);
 
-        let mut conf = Books::new(PathBuf::from("test/path"), "content".to_string(), test_time);
+        let mut conf = Bo::new(PathBuf::from("test/path"), "content".to_string(), test_time);
 
         conf.insert(&conn).await?;
 
-        let loaded = Books::select(&conn, "test/path").await?;
+        let loaded = Bo::select(&conn, "test/path").await?;
 
         let time_diff = loaded
             .inserted
@@ -294,7 +296,7 @@ mod tests {
         // Insert multiple test entries
         let paths = ["test/path1", "test/path2", "test/path3"];
         for path in paths.iter() {
-            let mut conf = Books::new(
+            let mut conf = Bo::new(
                 PathBuf::from(path),
                 format!("content for {}", path),
                 test_time,
@@ -304,22 +306,22 @@ mod tests {
 
         // Verify all entries were inserted
         for path in paths.iter() {
-            let conf = Books::select(&conn, path).await?;
+            let conf = Bo::select(&conn, path).await?;
             assert_eq!(conf.content, format!("content for {}", path));
         }
 
         // Delete multiple entries
         for path in &paths[0..2] {
-            Books::remove(&conn, path).await?;
+            Bo::remove(&conn, path).await?;
         }
 
         // Verify deleted entries are gone
         for path in &paths[0..2] {
-            assert!(Books::select(&conn, path).await.is_err());
+            assert!(Bo::select(&conn, path).await.is_err());
         }
 
         // Verify remaining entry still exists
-        let remaining = Books::select(&conn, &paths[2]).await?;
+        let remaining = Bo::select(&conn, &paths[2]).await?;
         assert_eq!(remaining.content, format!("content for {}", paths[2]));
 
         Ok(())
@@ -339,7 +341,7 @@ mod tests {
         ];
 
         for path in dir_paths.iter() {
-            let mut conf = Books::new(
+            let mut conf = Bo::new(
                 PathBuf::from(path),
                 format!("content for {}", path),
                 test_time,
@@ -349,22 +351,22 @@ mod tests {
 
         // Verify all entries exist
         for path in dir_paths.iter() {
-            let conf = Books::select(&conn, path).await?;
+            let conf = Bo::select(&conn, path).await?;
             assert_eq!(conf.content, format!("content for {}", path));
         }
 
         // Delete entire directory
         for entry in dir_paths.iter().filter(|p| p.starts_with("test/dir1")) {
-            Books::remove(&conn, entry).await?;
+            Bo::remove(&conn, entry).await?;
         }
 
         // Verify dir1 entries are deleted
         for entry in dir_paths.iter().filter(|p| p.starts_with("test/dir1")) {
-            assert!(Books::select(&conn, entry).await.is_err());
+            assert!(Bo::select(&conn, entry).await.is_err());
         }
 
         // Verify dir2 entry still exists
-        let remaining = Books::select(&conn, "test/dir2/file1").await?;
+        let remaining = Bo::select(&conn, "test/dir2/file1").await?;
         assert_eq!(remaining.content, "content for test/dir2/file1");
 
         Ok(())
@@ -383,7 +385,7 @@ mod tests {
 
         // Create initial config and save to DB
         let initial_content = "initial content".to_string();
-        let mut conf = Books::new(test_path.clone(), initial_content.clone(), test_time);
+        let mut conf = Bo::new(test_path.clone(), initial_content.clone(), test_time);
         conf.insert(&conn).await?;
 
         // Write different content to file

@@ -8,9 +8,9 @@ use crate::config::Config;
 
 use ai::{handle_ai_commit, handle_ai_review};
 use anyhow::{Context, Result};
-use app::{AIAction, Commands, DfAction, Shelf};
+use app::{AIAction, BoAction, Commands, Shelf};
 use bo::{
-    handler::{handle_fs_list, handle_fs_track, handle_fs_untrack},
+    handler::{handle_bo_list, handle_bo_track, handle_bo_untrack},
     suggest::handle_fs_suggest,
 };
 use clap::{CommandFactory, Parser};
@@ -65,17 +65,18 @@ async fn main() -> Result<()> {
     .context("Failed to set pragmas")?;
 
     match cli.command {
-        Commands::Df { actions } => match actions {
-            DfAction::List { modified } => handle_fs_list(&conn, modified).await?,
-            DfAction::Untrack { recursive, paths } => {
-                handle_fs_untrack(&conn, recursive, paths).await?
+        Commands::Bo { actions } => match actions {
+            BoAction::List { modified } => handle_bo_list(&conn, modified).await?,
+            BoAction::Untrack { recursive, paths } => {
+                handle_bo_untrack(&conn, recursive, paths).await?
             }
-            DfAction::Track {
+            BoAction::Track {
+                paths,
+                // encrypt,
                 recursive,
                 restore,
-                paths,
-            } => handle_fs_track(&conn, recursive, restore, paths).await?,
-            DfAction::Suggest { interactive } => handle_fs_suggest(&conn, interactive).await?,
+            } => handle_bo_track(&conn, recursive, restore, paths).await?,
+            BoAction::Suggest { interactive } => handle_fs_suggest(&conn, interactive).await?,
         },
         Commands::Ai { actions } => match actions {
             AIAction::Commit {
