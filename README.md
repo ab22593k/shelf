@@ -74,8 +74,8 @@ shelf ai config list
 ```
 
 The AI-powered features support diffrent AI providers:
-- **Groq** (default): GroqCloud-based models
 - **Google Gemini**: Cloud-based using Gemini models
+- **Groq** (default): GroqCloud-based models
 - **OpenAI**: Cloud-based using GPT models
 - **Anthropic Claude**: Cloud-based using Claude models
 - **XAI Grok**: Cloud-based using Grok models
