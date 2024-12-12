@@ -1,7 +1,7 @@
-pub mod handler;
 pub mod suggest;
+pub mod utils;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Context, Result};
 use rusqlite::Connection;
 use tokio::fs;
 
@@ -23,13 +23,13 @@ pub struct Bo {
     /// Filesystem path to the tracked configuration file
     pub path: PathBuf,
     /// Current contents of the file as a string
-    pub(crate) content: String,
+    pub content: String,
     /// Timestamp when the file was last synchronized
     inserted: SystemTime,
 }
 
 impl Bo {
-    pub fn new(path: PathBuf, content: String, inserted: SystemTime) -> Self {
+    pub const fn new(path: PathBuf, content: String, inserted: SystemTime) -> Self {
         Self {
             path,
             content,
@@ -37,37 +37,32 @@ impl Bo {
         }
     }
 
-    /// Creates a new `Dotfile` instance from disk.
+    /// Creates a new `Bo` instance from a file.
     pub async fn from_file(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
         let content = fs::read_to_string(path)
             .await
-            .map_err(|e| anyhow!("Failed to read file {}: {}", path.display(), e))?;
+            .with_context(|| format!("Failed to read file: {}", path.display()))?;
 
         let metadata = fs::metadata(path)
             .await
-            .map_err(|e| anyhow!("Failed to read metadata for {}: {}", path.display(), e))?;
+            .with_context(|| format!("Failed to read metadata for: {}", path.display()))?;
 
-        let last_modified = metadata.modified().map_err(|e| {
-            anyhow!(
-                "Failed to get modification time for {}: {}",
-                path.display(),
-                e
-            )
-        })?;
+        let last_modified = metadata
+            .modified()
+            .with_context(|| format!("Failed to get modification time for: {}", path.display()))?;
 
         Ok(Self::new(path.to_path_buf(), content, last_modified))
     }
 
-    /// Retrieves a `Dotfile` from the database based on the given file path.
+    /// Retrieves a `Bo` from the database.
     pub async fn select(conn: &Connection, path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
-
         let mut stmt =
             conn.prepare("SELECT content, last_modified FROM dotconf WHERE path = ?1")?;
 
         let (content, last_modified): (String, i64) = stmt
-            .query_row([path.to_string_lossy().to_string()], |row| {
+            .query_row([path.to_string_lossy()], |row| {
                 Ok((row.get(0)?, row.get(1)?))
             })?;
 
@@ -77,17 +72,18 @@ impl Bo {
         Ok(Self::new(path.to_path_buf(), content, inserted))
     }
 
-    /// Inserts or update `Dotfile` content in the database.
+    /// Inserts or updates a `Bo` in the database.
     pub async fn insert(&mut self, conn: &Connection) -> Result<()> {
         let unix_timestamp = self
             .inserted
-            .duration_since(SystemTime::UNIX_EPOCH)?
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .context("System time before Unix epoch")? // More specific error
             .as_secs();
 
         conn.execute(
             "INSERT OR REPLACE INTO dotconf (path, content, last_modified) VALUES (?1, ?2, ?3)",
             (
-                self.path.to_string_lossy().to_string(),
+                self.path.to_string_lossy(),
                 &self.content,
                 unix_timestamp as i64,
             ),
@@ -97,47 +93,45 @@ impl Bo {
     }
 
     /// Removes a `Dotfile` from the database based on the given file path.
-    pub async fn remove(conn: &Connection, path: impl AsRef<Path>) -> Result<()> {
+    pub async fn remove<T>(conn: &Connection, path: T) -> Result<()>
+    where
+        T: AsRef<Path>,
+    {
         let path = path.as_ref();
         conn.execute(
             "DELETE FROM dotconf WHERE path = ?1",
-            [path.to_string_lossy().to_string()],
+            [path.to_string_lossy()],
         )?;
         Ok(())
     }
 
-    /// Restores `Dotfile` content from the database.
+    /// Restores `Bo` content from the database to the file system.
     pub async fn restore(&mut self, conn: &Connection) -> Result<()> {
         let mut stmt = conn.prepare("SELECT content FROM dotconf WHERE path = ?1")?;
 
-        let content: String = stmt
-            .query_row([self.path.to_string_lossy().to_string()], |row| row.get(0))
-            .map_err(|e| {
-                anyhow!(
-                    "Failed to read content from database for {}: {}",
-                    self.path.display(),
-                    e
+        self.content = stmt
+            .query_row([self.path.to_string_lossy()], |row| row.get(0))
+            .with_context(|| {
+                format!(
+                    "Failed to read content from database for: {}",
+                    self.path.display()
                 )
             })?;
 
-        fs::write(&self.path, &content)
+        fs::write(&self.path, &self.content)
             .await
-            .map_err(|e| anyhow!("Failed to write file {}: {}", self.path.display(), e))?;
+            .with_context(|| format!("Failed to write file: {}", self.path.display()))?;
 
         let metadata = fs::metadata(&self.path)
             .await
-            .map_err(|e| anyhow!("Failed to read metadata for {}: {}", self.path.display(), e))?;
+            .with_context(|| format!("Failed to read metadata for: {}", self.path.display()))?;
 
-        let last_modified = metadata.modified().map_err(|e| {
-            anyhow!(
-                "Failed to get modification time for {}: {}",
-                self.path.display(),
-                e
+        self.inserted = metadata.modified().with_context(|| {
+            format!(
+                "Failed to get modification time for: {}",
+                self.path.display()
             )
         })?;
-
-        self.content = content;
-        self.inserted = last_modified;
 
         Ok(())
     }
@@ -145,6 +139,8 @@ impl Bo {
 
 #[cfg(test)]
 mod tests {
+
+    use tokio::fs;
 
     use super::*;
     use std::time::Duration;
@@ -159,6 +155,7 @@ mod tests {
             )",
             [],
         )?;
+
         Ok(conn)
     }
 
@@ -380,7 +377,7 @@ mod tests {
 
         // Ensure test file doesn't exist
         if test_path.exists() {
-            tokio::fs::remove_file(&test_path).await?;
+            fs::remove_file(&test_path).await?;
         }
 
         // Create initial config and save to DB
@@ -390,17 +387,17 @@ mod tests {
 
         // Write different content to file
         let file_content = "file content".to_string();
-        tokio::fs::write(&test_path, &file_content).await?;
+        fs::write(&test_path, &file_content).await?;
 
         // Restore should restore DB content to file
         conf.restore(&conn).await?;
 
         // Verify file content matches DB content
-        let file_content = tokio::fs::read_to_string(&test_path).await?;
+        let file_content = fs::read_to_string(&test_path).await?;
         assert_eq!(file_content, initial_content);
 
         // Clean up
-        tokio::fs::remove_file(&test_path).await?;
+        fs::remove_file(&test_path).await?;
 
         Ok(())
     }

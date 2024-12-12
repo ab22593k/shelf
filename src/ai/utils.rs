@@ -2,6 +2,12 @@ use anyhow::{anyhow, Result};
 use colored::Colorize;
 use std::{fs, path::Path};
 
+use crate::{
+    ai::{prompts::PromptKind, provider::create_provider},
+    configure::Config,
+    spinner,
+};
+
 pub fn get_diff_cached<T: AsRef<Path>>(path: T) -> Result<String> {
     let repo = git2::Repository::open(path)?;
     let mut options = git2::DiffOptions::new();
@@ -28,6 +34,63 @@ pub fn get_diff_cached<T: AsRef<Path>>(path: T) -> Result<String> {
     })?;
 
     Ok(diff_string)
+}
+
+pub async fn handle_ai_commit(
+    app_conf: Config,
+    provider_override: Option<String>,
+    model_override: Option<String>,
+) -> Result<()> {
+    // let mut config = AI::load().await?;
+    let mut ai_config = app_conf.read_all()?;
+    if let Some(provider_name) = provider_override {
+        ai_config.provider = provider_name;
+    }
+    if let Some(model_name) = model_override {
+        ai_config.model = model_name;
+    }
+
+    let provider = create_provider(&ai_config)?;
+    let commit_msg = spinner::new(|| async {
+        let diff = get_diff_cached(".")?;
+        provider
+            .generate_assistant_message(PromptKind::Commit, &diff)
+            .await
+    })
+    .await?;
+
+    println!(
+        "{}\n{}",
+        "Generated commit message:".green().bold(),
+        commit_msg
+    );
+    Ok(())
+}
+
+pub async fn handle_ai_review(
+    configs: Config,
+    provider_override: Option<String>,
+    model_override: Option<String>,
+) -> Result<()> {
+    let mut dd = configs.read_all()?;
+    if let Some(provider_name) = provider_override {
+        dd.provider = provider_name;
+    }
+    if let Some(model_name) = model_override {
+        dd.model = model_name;
+    }
+
+    let provider = create_provider(&dd)?;
+    let review = spinner::new(|| async {
+        let diff = get_diff_cached(".")?;
+        provider
+            .generate_assistant_message(PromptKind::Review, &diff)
+            .await
+    })
+    .await?;
+
+    println!("{}\n{}", "Code review:".green().bold(), review);
+    Ok(())
 }
 
 pub fn install_git_hook(hooks_dir: &Path) -> Result<()> {

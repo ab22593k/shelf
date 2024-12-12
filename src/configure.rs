@@ -1,7 +1,7 @@
 use crate::{
     ai::{
-        git::{install_git_hook, remove_git_hook},
-        provider::{ApiKey, OLLAMA_HOST},
+        utils::{install_git_hook, remove_git_hook},
+        ApiKey,
     },
     app::AIConfigAction,
 };
@@ -103,7 +103,6 @@ pub struct AIProviderConfig {
     pub ollama_host: Option<String>,
 }
 
-/// Default configuration for AI providers. Uses XAI as default provider.
 impl Default for AIProviderConfig {
     fn default() -> Self {
         Self {
@@ -114,7 +113,7 @@ impl Default for AIProviderConfig {
             gemini_api_key: None,
             groq_api_key: None,
             xai_api_key: None,
-            ollama_host: Some(OLLAMA_HOST.to_string()),
+            ollama_host: None,
         }
     }
 }

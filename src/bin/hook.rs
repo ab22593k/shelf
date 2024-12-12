@@ -8,8 +8,8 @@ use anyhow::{anyhow, Result};
 use clap::Parser;
 use colored::*;
 use shelf::{
-    ai::{git::get_diff_cached, prompt::SysPromptKind, provider::create_provider},
-    config::Config,
+    ai::{prompts::PromptKind, provider::create_provider, utils::get_diff_cached},
+    configure::Config,
     spinner,
 };
 
@@ -60,7 +60,7 @@ async fn handle_commit(config: Config, args: &Args) -> Result<()> {
     let commit_msg = spinner::new(|| async {
         let diff = get_diff_cached(".");
         provider
-            .generate_assistant_message(SysPromptKind::Commit, &diff?)
+            .generate_assistant_message(PromptKind::Commit, &diff?)
             .await
     })
     .await?;

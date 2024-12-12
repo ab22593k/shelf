@@ -1,23 +1,20 @@
-pub mod git;
-pub mod http;
-pub mod prompt;
+#![allow(unused)]
+
+pub mod error;
+pub mod prompts;
 pub mod provider;
+pub mod utils;
 
 use anyhow::Result;
 use async_trait::async_trait;
-use colored::Colorize;
-use git::get_diff_cached;
-use prompt::SysPromptKind;
-use provider::create_provider;
-
-use crate::{config::Config, spinner};
+use prompts::PromptKind;
+use serde::{Deserialize, Serialize};
 
 /// Trait for AI providers.
 #[async_trait]
 pub trait Provider: Send + Sync {
     /// Generate a response from the AI model.
-    async fn generate_assistant_message(&self, prompt: SysPromptKind, diff: &str)
-        -> Result<String>;
+    async fn generate_assistant_message(&self, prompt: PromptKind, diff: &str) -> Result<String>;
 
     /// Format the user prompt with the diff.
     fn format_prompt(&self, prompt: &str, diff: &str) -> String {
@@ -25,59 +22,50 @@ pub trait Provider: Send + Sync {
     }
 }
 
-pub async fn handle_ai_commit(
-    app_conf: Config,
-    provider_override: Option<String>,
-    model_override: Option<String>,
-) -> Result<()> {
-    // let mut config = AI::load().await?;
-    let mut ai_config = app_conf.read_all()?;
-    if let Some(provider_name) = provider_override {
-        ai_config.provider = provider_name;
-    }
-    if let Some(model_name) = model_override {
-        ai_config.model = model_name;
+/// Wrapper for API keys.  Provides custom Debug and Serde implementations to avoid logging sensitive data.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct ApiKey(String);
+
+impl ApiKey {
+    /// Create a new ApiKey.
+    pub fn new(key: impl Into<String>) -> Self {
+        Self(key.into())
     }
 
-    let provider = create_provider(&ai_config)?;
-    let commit_msg = spinner::new(|| async {
-        let diff = get_diff_cached(".")?;
-        provider
-            .generate_assistant_message(SysPromptKind::Commit, &diff)
-            .await
-    })
-    .await?;
+    /// Return the API key as a string slice.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 
-    println!(
-        "{}\n{}",
-        "Generated commit message:".green().bold(),
-        commit_msg
-    );
-    Ok(())
+    /// Consume the ApiKey and return the inner String.
+    pub fn into_inner(self) -> String {
+        self.0
+    }
 }
 
-pub async fn handle_ai_review(
-    configs: Config,
-    provider_override: Option<String>,
-    model_override: Option<String>,
-) -> Result<()> {
-    let mut dd = configs.read_all()?;
-    if let Some(provider_name) = provider_override {
-        dd.provider = provider_name;
+/// Custom Debug implementation to avoid accidentally logging API keys.
+impl std::fmt::Display for ApiKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
     }
-    if let Some(model_name) = model_override {
-        dd.model = model_name;
+}
+
+/// Serde serialization implementation for ApiKey.
+impl Serialize for ApiKey {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.0.serialize(serializer)
     }
+}
 
-    let provider = create_provider(&dd)?;
-    let review = spinner::new(|| async {
-        let diff = get_diff_cached(".")?;
-        provider
-            .generate_assistant_message(SysPromptKind::Review, &diff)
-            .await
-    })
-    .await?;
-
-    println!("{}\n{}", "Code review:".green().bold(), review);
-    Ok(())
+/// Serde deserialization implementation for ApiKey.
+impl<'de> Deserialize<'de> for ApiKey {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        String::deserialize(deserializer).map(ApiKey::new)
+    }
 }

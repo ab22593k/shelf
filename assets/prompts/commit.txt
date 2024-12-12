@@ -68,7 +68,6 @@ fix: Resolve memory leak in background worker 🐛
 - Prevents potential out-of-memory crashes under high load.
 
 ## Do Not
-- Avoid vague messages like "Update code"
 - Never generate commit messages that are too generic
 - Do not include unnecessary implementation details
 - Avoid disclosing sensitive information
