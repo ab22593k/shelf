@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Context, Result};
 use directories::BaseDirs;
-use std::{fmt, fs, path::PathBuf};
+use std::{fmt, fs};
 
 pub const USER_COMMIT_PROMPT: &str = "Generate concise and professional commit messages. Provide clear context for code changes.\n\nGit diff changes:\n";
 pub const USER_REVIEW_PROMPT: &str = "Please review the following code changes and provide a detailed analysis. Consider:\n1. Potential bugs or issues\n2. Code style and best practices\n3. Performance implications\n4. Security concerns\n\nHere is the diff:";
