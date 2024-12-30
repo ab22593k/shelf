@@ -8,8 +8,8 @@ use anyhow::{anyhow, Result};
 use clap::Parser;
 use colored::*;
 use shelf::{
-    ai::{prompts::PromptKind, provider::create_provider, utils::get_diff_cached},
-    configure::Config,
+    ai::{prompt::PromptKind, provider::create_provider, utils::get_diff_cached},
+    config::Config,
     spinner,
 };
 

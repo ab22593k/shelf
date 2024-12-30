@@ -3,8 +3,8 @@ use colored::Colorize;
 use std::{fs, path::Path};
 
 use crate::{
-    ai::{prompts::PromptKind, provider::create_provider},
-    configure::Config,
+    ai::{prompt::PromptKind, provider::create_provider},
+    config::Config,
     spinner,
 };
 

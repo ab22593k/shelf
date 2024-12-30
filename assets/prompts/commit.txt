@@ -22,8 +22,14 @@ You are an expert assistant specialized in generating precise, informative, and 
     CI/CD 👷: Continuous integration updates
     chore 🔧: Maintenance tasks
 
-   ### Body Guidelines
-   - Summarize changes
+    ### Body Guidelines
+    - Separate subject from body with a blank line
+    - Explain what and why vs. how
+    - Keep lines wrapped at 72 characters
+    - Use bullet points for details
+    - Reference issue numbers when applicable
+    - Include impact of changes on system behavior
+    - Mention breaking changes prominently
 
 ## Contextual Adaptation
 - Analyze the specific code changes
@@ -32,8 +38,7 @@ You are an expert assistant specialized in generating precise, informative, and 
 
 ## Advanced Message Generation Strategies
 1. Technical Depth
-   - Include technical rationale for significant changes
-   - Highlight non-obvious implementation details
+   - Include technical rationale only for significant changes
    - Explain design decisions or algorithmic improvements
 
 2. Problem-Solution Approach
@@ -71,7 +76,6 @@ fix: Resolve memory leak in background worker 🐛
 ## Output Instructions
 1. Always generate a subject line first
 5. Scale message body based on change significance
-6. Return the commit message only
 
 ## Contextual Considerations
 - Consider the target audience (developers, reviewers)
@@ -81,3 +85,4 @@ fix: Resolve memory leak in background worker 🐛
 - Review generated message for clarity and precision
 - Ensure message provides meaningful insight into changes
 - Aim to help future developers understand the commit's purpose
+- Return the commit message only

@@ -1,6 +1,6 @@
-use crate::configure::AIProviderConfig;
+use crate::config::ProviderConfig;
 
-use super::{error::ProviderError, prompts::PromptKind, ApiKey, Provider};
+use super::{prompt::PromptKind, Provider};
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use genai::{
@@ -9,6 +9,55 @@ use genai::{
     resolver::{AuthData, AuthResolver},
     Client, ModelIden,
 };
+use serde::{Deserialize, Serialize};
+
+/// Wrapper for API keys. Provides custom Debug and Serde implementations to avoid logging sensitive data.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct ApiKey(String);
+
+impl ApiKey {
+    /// Create a new ApiKey.
+    pub fn new(key: impl Into<String>) -> Self {
+        Self(key.into())
+    }
+
+    /// Return the API key as a string slice.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Consume the ApiKey and return the inner String.
+    pub fn into_inner(self) -> String {
+        self.0
+    }
+}
+
+/// Custom Debug implementation to avoid accidentally logging API keys.
+impl std::fmt::Display for ApiKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+/// Serde serialization implementation for ApiKey.
+impl Serialize for ApiKey {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.0.serialize(serializer)
+    }
+}
+
+/// Serde deserialization implementation for ApiKey.
+impl<'de> Deserialize<'de> for ApiKey {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        String::deserialize(deserializer).map(ApiKey::new)
+    }
+}
 
 // Base trait for common provider functionality
 trait BaseProvider {
@@ -41,14 +90,13 @@ trait BaseProvider {
     }
 }
 
-pub fn create_provider(config: &AIProviderConfig) -> Result<Box<dyn Provider>> {
+pub fn create_provider(config: &ProviderConfig) -> Result<Box<dyn Provider>> {
     match config.provider.as_str() {
         "openai" => create_api_provider::<OpenAIProvider>(config.openai_api_key.as_ref()),
         "anthropic" => create_api_provider::<AnthropicProvider>(config.anthropic_api_key.as_ref()),
         "gemini" => create_api_provider::<GeminiProvider>(config.gemini_api_key.as_ref()),
         "groq" => create_api_provider::<GroqProvider>(config.groq_api_key.as_ref()),
         "xai" => create_api_provider::<XAIProvider>(config.xai_api_key.as_ref()),
-        "ollama" => create_api_provider::<OllamaProvider>(Some(&ApiKey("".to_string()))),
         _ => Err(anyhow!("Unsupported provider: {}", config.provider)),
     }
 }
@@ -105,11 +153,7 @@ macro_rules! impl_provider {
                 let response = self
                     .get_client()
                     .exec_chat(self.get_model(), chat_request, Some(&options))
-                    .await
-                    .map_err(|e| ProviderError::ChatExecution {
-                        model: self.get_model().to_string(),
-                        source: e,
-                    })?;
+                    .await?;
 
                 Ok(response
                     .content

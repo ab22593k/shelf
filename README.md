@@ -5,7 +5,7 @@
 Shelf is a command-line tool for bookmarking configuration files in the system, generating git commit
 messages and reviewing code using AI.
 
-It provides a simple interface to track files across your system and integrates with multiple AI
+It provides a simple command-line command to track files across your system and integrates with multiple AI
 providers to automatically generate meaningful commit messages through git hooks and perform
 comprehensive code reviews. Shelf makes configuration files management, git commits messages and
 code reviews effortless.
@@ -110,29 +110,6 @@ The AI review provides:
 - Performance improvement suggestions
 - Best practice recommendations
 
-## Migration from v0.8.7 to newer versions
-
-If you're upgrading from a v0.8.7 version of Shelf, here are the key changes and migration steps:
-
-### Migration Steps
-
-1. Convert your existing config:
-```bash
-# Migration hints
-shelf migrate
-
-# Apply changes
-shelf migrate --fix
-```
-
-## Prompts
-
-Prompt templates for commit messages and code reviews are stored in `$XDG_CONFIG_HOME/shelf`
-(or `~/.config/shelf` if `$XDG_CONFIG_HOME` is not set).
-
-You can customize these templates to tailor the AI's output to your specific needs.
-
-
 ## Shell Completion
 
 Shelf supports generating shell completion scripts for various shells. You can generate these
@@ -170,35 +147,14 @@ AI settings are stored in `~/.config/shelf/ai.json` (or `$XDG_CONFIG_HOME/shelf/
 - `provider`: AI provider to use (`openai`, `anthropic`, `gemini`, `groq`, `xai` and `ollama`)
 - `model`: Ollama model to use (default: `qwen2.5-coder`)
 - `openai_api_key`: OpenAI API key for GPT models
-- `ollama_host`: Ollama server URL (default: `http://localhost:11434`)
 
 Example configuration:
 ```json
 {
   "provider": "ollama",
   "model": "qwen2.5-coder",
-  "ollama_host": "http://localhost:11434" # Only if you are using custom host,
 }
 ```
-## Development
-
-To build the project locally:
-
-```
-cargo build
-```
-To run tests:
-
-```
-cargo test
-```
-To run the project directly without installing:
-
-```
-cargo run --bin shelf -- [SUBCOMMAND]
-```
-
-Replace `[SUBCOMMAND]` with the command you want to run, such as `bo` or `ai`.
 
 ## Contributing
 

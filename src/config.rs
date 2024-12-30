@@ -1,18 +1,10 @@
-use crate::{
-    ai::{
-        utils::{install_git_hook, remove_git_hook},
-        ApiKey,
-    },
-    app::AIConfigAction,
-};
-
+use crate::ai::provider::ApiKey;
 use anyhow::{anyhow, Context, Result};
-use colored::Colorize;
 use serde::{Deserialize, Serialize};
 
 use std::{fs, io::Write, path::PathBuf};
 
-pub const AI_SETTINGS_FILENAME: &str = "ai.json";
+pub const AI_SETTINGS_FILENAME: &str = "settings.json";
 
 /// Represents configuration operations for the application.
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -21,7 +13,7 @@ pub struct Config {
     pub path: PathBuf,
 
     /// AI configuration.
-    pub ai: AIProviderConfig,
+    pub provider: ProviderConfig,
 }
 
 impl Default for Config {
@@ -32,7 +24,7 @@ impl Default for Config {
 
         Self {
             path,
-            ai: AIProviderConfig::default(),
+            provider: ProviderConfig::default(),
         }
     }
 }
@@ -42,21 +34,21 @@ impl Config {
     ///
     /// If the file exists, it attempts to deserialize the contents into an `AIConfig`.
     /// If the file doesn't exist, it creates a default `AIConfig`, saves it to the file, and returns it.
-    pub fn read_all(&self) -> Result<AIProviderConfig> {
+    pub fn read_all(&self) -> Result<ProviderConfig> {
         let ai_json_file = Self::default().path.join(AI_SETTINGS_FILENAME);
         if ai_json_file.exists() {
             let content = fs::read_to_string(&ai_json_file).with_context(|| {
                 format!("Failed to read config file: {}", ai_json_file.display())
             })?;
 
-            let config: AIProviderConfig = serde_json::from_str(&content).with_context(|| {
+            let config: ProviderConfig = serde_json::from_str(&content).with_context(|| {
                 format!("Failed to parse config file: {}", ai_json_file.display())
             })?;
 
             Ok(config)
         } else {
             // Create default config and save it
-            let config = AIProviderConfig::default();
+            let config = ProviderConfig::default();
             Self::write_all(&config)?;
             Ok(config)
         }
@@ -66,7 +58,7 @@ impl Config {
     ///
     /// Serializes the `config` to JSON and writes it to the file specified by `create_ai_settings()`.
     /// Creates any necessary parent directories.
-    pub fn write_all(config: &AIProviderConfig) -> Result<()> {
+    pub fn write_all(config: &ProviderConfig) -> Result<()> {
         let ai_json_file = Self::default().path.join(AI_SETTINGS_FILENAME);
 
         // Create parent directories if they don't exist
@@ -91,7 +83,7 @@ impl Config {
 
 /// Configuration for AI providers.
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct AIProviderConfig {
+pub struct ProviderConfig {
     /// The name of the provider to use.
     pub provider: String,
     pub model: String,
@@ -100,10 +92,9 @@ pub struct AIProviderConfig {
     pub gemini_api_key: Option<ApiKey>,
     pub groq_api_key: Option<ApiKey>,
     pub xai_api_key: Option<ApiKey>,
-    pub ollama_host: Option<String>,
 }
 
-impl Default for AIProviderConfig {
+impl Default for ProviderConfig {
     fn default() -> Self {
         Self {
             provider: "gemini".to_string(),
@@ -113,12 +104,11 @@ impl Default for AIProviderConfig {
             gemini_api_key: None,
             groq_api_key: None,
             xai_api_key: None,
-            ollama_host: None,
         }
     }
 }
 
-impl AIProviderConfig {
+impl ProviderConfig {
     /// Set a configuration value.
     pub fn set(&mut self, key: &str, value: &str) -> Result<()> {
         match key {
@@ -129,7 +119,6 @@ impl AIProviderConfig {
             "gemini_api_key" => self.gemini_api_key = Some(ApiKey::new(value)),
             "groq_api_key" => self.groq_api_key = Some(ApiKey::new(value)),
             "xai_api_key" => self.xai_api_key = Some(ApiKey::new(value)),
-            "ollama_host" => self.ollama_host = Some(value.to_string()),
             _ => return Err(anyhow!("Unknown config key: {}", key)),
         }
 
@@ -149,7 +138,6 @@ impl AIProviderConfig {
             "gemini_api_key" => self.gemini_api_key.as_ref().map(|k| k.as_str().to_string()),
             "groq_api_key" => self.groq_api_key.as_ref().map(|k| k.as_str().to_string()),
             "xai_api_key" => self.xai_api_key.as_ref().map(|k| k.as_str().to_string()),
-            "ollama_host" => self.ollama_host.clone(),
             _ => None,
         }
     }
@@ -181,67 +169,9 @@ impl AIProviderConfig {
         if let Some(key) = &self.xai_api_key {
             items.push(("xai_api_key", key.clone().to_string()));
         }
-        if let Some(host) = &self.ollama_host {
-            items.push(("ollama_host", host.clone()));
-        }
 
         items
     }
-}
-
-pub async fn handle_ai_config(config: Config, action: AIConfigAction) -> Result<()> {
-    let mut config = config.read_all()?;
-    match action {
-        AIConfigAction::Set { key, value } => {
-            config.set(&key, &value)?;
-            config.write_all().await?;
-            println!("{} {} = {}", "Set:".green().bold(), key, value);
-        }
-
-        AIConfigAction::Get { key } => {
-            if let Some(value) = config.get(&key) {
-                println!("{}", value);
-            } else {
-                println!("{} Key not found: {}", "Error:".red().bold(), key);
-            }
-        }
-
-        AIConfigAction::List => {
-            println!("{}", "Configuration:".green().bold());
-            config
-                .list()
-                .iter()
-                .for_each(|(k, v)| println!("{} = {}", k, v));
-        }
-
-        AIConfigAction::Hook { install, uninstall } => match git2::Repository::open_from_env() {
-            Ok(repo) => {
-                let hooks_dir = repo.path().join("hooks");
-
-                if install {
-                    match install_git_hook(&hooks_dir) {
-                        Ok(_) => {}
-                        Err(e) => {
-                            eprintln!("{} Failed to install hook: {}", "Error:".red().bold(), e);
-                        }
-                    }
-                } else if uninstall {
-                    match remove_git_hook(&hooks_dir) {
-                        Ok(_) => {}
-                        Err(e) => {
-                            eprintln!("{} Failed to uninstall hook: {}", "Error:".red().bold(), e);
-                        }
-                    }
-                }
-            }
-            Err(e) => println!(
-                "{} Failed to open git repository: {}",
-                "Error:".red().bold(),
-                e
-            ),
-        },
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -285,7 +215,7 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         std::env::set_var("XDG_CONFIG_HOME", temp_dir.path());
 
-        let mut config = AIProviderConfig::default();
+        let mut config = ProviderConfig::default();
         config.set("gemini_api_key", "api_key").unwrap();
 
         assert_eq!(config.get("provider"), Some("gemini".to_string()));

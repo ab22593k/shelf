@@ -1,22 +1,22 @@
 mod ai;
-mod app;
 mod bo;
-mod configure;
+mod config;
 mod spinner;
 mod storage;
+mod utils;
 
-use crate::{configure::Config, storage::initialize_database};
+use crate::{config::Config, storage::initialize_database};
 use ai::utils::{handle_ai_commit, handle_ai_review};
 use anyhow::{Context, Result};
-use app::{AIAction, BoAction, Commands, Shelf};
 use bo::{
     suggest::handle_fs_suggest,
     utils::{handle_bo_list, handle_bo_track, handle_bo_untrack},
 };
 use clap::{CommandFactory, Parser};
 use clap_complete::{generate, Generator};
-use configure::handle_ai_config;
+use shelf::{AIAction, BoAction, Commands, ProviderAction, Shelf};
 use std::{fs, io};
+use utils::handle_provider_config;
 
 fn print_completions<G: Generator>(gen: G, cmd: &mut clap::Command) -> Result<()> {
     let bin_name = cmd.get_bin_name().unwrap_or("shelf").to_string();
@@ -65,7 +65,7 @@ async fn main() -> Result<()> {
                 provider: provider_override,
                 model: model_override,
             } => handle_ai_review(config, provider_override, model_override).await?,
-            AIAction::Config { action } => handle_ai_config(config, action).await?,
+            AIAction::Config { action } => handle_provider_config(config, action).await?,
         },
 
         Commands::Completion { shell } => {
