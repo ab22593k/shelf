@@ -28,7 +28,7 @@ shellexpand = "3.1.0"
 clap_complete = "4.5.40"
 colored = "2.1.0"
 directories = "5.0.1"
-rusqlite = "0.32.1"
+rusqlite = { version = "0.32.1", features = ["bundled"] }
 chrono = "0.4.39"
 walkdir = "2.5.0"
 genai = "0.1.15"

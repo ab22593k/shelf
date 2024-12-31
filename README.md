@@ -142,7 +142,7 @@ After setting up the completion script, restart your shell or source the respect
 
 ## Configuration
 
-AI settings are stored in `~/.config/shelf/ai.json` (or `$XDG_CONFIG_HOME/shelf/ai.json` if set). You can configure:
+AI settings are stored in `~/.config/shelf/settings.json` (or `$XDG_CONFIG_HOME/shelf/settings.json` if set). You can configure:
 
 - `provider`: AI provider to use (`openai`, `anthropic`, `gemini`, `groq`, `xai` and `ollama`)
 - `model`: Ollama model to use (default: `qwen2.5-coder`)

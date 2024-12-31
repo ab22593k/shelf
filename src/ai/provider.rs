@@ -167,9 +167,9 @@ macro_rules! impl_provider {
     };
 }
 
-impl_provider!(GeminiProvider, "gemini-exp-1206");
-impl_provider!(GroqProvider, "llama-3.3-70b-versatile");
-impl_provider!(XAIProvider, "grok-beta");
+impl_provider!(GeminiProvider, "gemini-2.0-flash-exp");
+impl_provider!(GroqProvider, "gemma2-9b-it");
+impl_provider!(XAIProvider, "grok-2");
 impl_provider!(OpenAIProvider, "gpt-3.5-turbo");
 impl_provider!(AnthropicProvider, "claude-3.5-sonnet");
 impl_provider!(OllamaProvider, "qwen2.5-coder");
