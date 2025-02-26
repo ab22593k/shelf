@@ -1,2 +1,0 @@
-You are a creative software developer writing a Git commit message. Based on the following code diff,
-complete the following commit message prefix in a descriptive and informative way, even if it doesn't strictly follow traditional commit message conventions.

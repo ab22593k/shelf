@@ -1,78 +1,53 @@
-mod ai;
-mod bo;
-mod config;
-mod spinner;
-mod storage;
+pub mod app;
+mod commit;
+mod review;
+mod shell;
+pub mod tabs;
 mod utils;
 
-use crate::{config::Config, storage::initialize_database};
-use ai::utils::{handle_ai_commit, handle_ai_review};
-use anyhow::{Context, Result};
-use bo::{
-    suggest::handle_fs_suggest,
-    utils::{handle_bo_list, handle_bo_track, handle_bo_untrack},
-};
-use clap::{CommandFactory, Parser};
-use clap_complete::{generate, Generator};
-use shelf::{AIAction, BoAction, Commands, ProviderAction, Shelf};
-use std::{fs, io};
-use utils::handle_provider_config;
+use crate::app::{Shelf, run_app};
+use crate::tabs::Tabs;
+use anyhow::Result;
+use clap::Parser;
+use colored::Colorize;
+use std::env;
+use std::process;
+use tracing::level_filters::LevelFilter;
 
-fn print_completions<G: Generator>(gen: G, cmd: &mut clap::Command) -> Result<()> {
-    let bin_name = cmd.get_bin_name().unwrap_or("shelf").to_string();
-    generate::<G, _>(gen, cmd, bin_name, &mut io::stdout());
-    Ok(())
+async fn initialize_tracing() {
+    let level = match env::var("RUST_LOG")
+        .unwrap_or_else(|_| "off".to_string())
+        .to_lowercase()
+        .as_str()
+    {
+        "trace" => LevelFilter::TRACE,
+        "debug" => LevelFilter::DEBUG,
+        "info" => LevelFilter::INFO,
+        "warn" => LevelFilter::WARN,
+        "error" => LevelFilter::ERROR,
+        _ => LevelFilter::OFF,
+    };
+
+    if let Err(e) = tracing_subscriber::fmt()
+        .with_max_level(level)
+        .with_target(false)
+        .try_init()
+    {
+        eprintln!("Failed to initialize tracing: {}", e.to_string().red());
+    }
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    initialize_tracing().await;
+    colored::control::set_override(true);
+
     let cli = Shelf::parse();
-    let config = Config::default();
+    let repo = Tabs::default();
 
-    // Ensure config directory exists
-    if !config.path.exists() {
-        fs::create_dir_all(&config.path).with_context(|| {
-            format!(
-                "Failed to create `shelf` config directory: {}",
-                config.path.display()
-            )
-        })?;
+    if let Err(err) = run_app(cli, repo).await {
+        eprintln!("Error: {}", err.to_string().red());
+        process::exit(1);
     }
-
-    // Database initialization and migration
-    let conn = storage::establish_connection().await?;
-    initialize_database(&conn).await?;
-
-    match cli.command {
-        Commands::Bo { action } => match action {
-            BoAction::List { modified } => handle_bo_list(&conn, modified).await?,
-            BoAction::Untrack { recursive, paths } => {
-                handle_bo_untrack(&conn, recursive, paths).await?
-            }
-            BoAction::Track {
-                paths,
-                recursive,
-                restore,
-            } => handle_bo_track(&conn, recursive, restore, paths).await?,
-            BoAction::Suggest { interactive } => handle_fs_suggest(&conn, interactive).await?,
-        },
-        Commands::Ai { action } => match action {
-            AIAction::Commit {
-                provider: provider_override,
-                model: model_override,
-            } => handle_ai_commit(config, provider_override, model_override).await?,
-            AIAction::Review {
-                provider: provider_override,
-                model: model_override,
-            } => handle_ai_review(config, provider_override, model_override).await?,
-            AIAction::Config { action } => handle_provider_config(config, action).await?,
-        },
-
-        Commands::Completion { shell } => {
-            let mut cmd = Shelf::command();
-            print_completions(shell, &mut cmd)?;
-        }
-    }
-
     Ok(())
 }
