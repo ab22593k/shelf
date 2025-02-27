@@ -11,6 +11,9 @@ workflow with AI-powered features. It enables you to:
 
 Integrated with git hooks and supporting multiple AI providers, Shelf adapts seamlessly to your development workflow.
 
+> **Note**: Currently, Shelf only supports Google Gemini as the AI provider.
+More providers will be added in future releases.
+
 ---
 
 ## Usage
@@ -19,27 +22,27 @@ Integrated with git hooks and supporting multiple AI providers, Shelf adapts sea
 
 Track files:
 ```bash
-shelf file track ~/.bashrc
+shelf dotfs track ~/.bashrc
 ```
 
 List tracked files:
 ```bash
-shelf file list
+shelf dotfs list
 ```
 
 List only modified files:
 ```bash
-shelf file list --dirty
+shelf dotfs list --dirty
 ```
 
 Untrack files:
 ```bash
-shelf file untrack ~/.bashrc
+shelf dotfs untrack ~/.bashrc
 ```
 
 Save current changes:
 ```bash
-shelf file save
+shelf dotfs save
 ```
 
 ### AI-Powered Git Commands
@@ -65,14 +68,8 @@ export GEMINI_API_KEY="your-key"
 
 Generate shell completions:
 ```bash
-# For bash
-shelf completion bash
-
 # For zsh
 shelf completion zsh
-
-# For fish
-shelf completion fish
 ```
 
 ---

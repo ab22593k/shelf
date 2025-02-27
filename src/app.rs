@@ -15,8 +15,8 @@ use crate::{
     utils::{get_staged_diff, run_with_progress},
 };
 use crate::{
+    dotfs::{DotFs, ListFilter},
     shell::completions_script,
-    tabs::{ListFilter, Tabs},
 };
 
 #[derive(Parser)]
@@ -30,7 +30,7 @@ pub struct Shelf {
 #[derive(Subcommand)]
 pub enum Commands {
     /// Manage system configuration files.
-    File {
+    Dotfs {
         #[command(subcommand)]
         action: FileAction,
     },
@@ -82,9 +82,9 @@ pub enum FileAction {
     Save,
 }
 
-pub async fn run_app(cli: Shelf, repo: Tabs) -> Result<()> {
+pub async fn run_app(cli: Shelf, repo: DotFs) -> Result<()> {
     match &cli.command {
-        Commands::File { action } => {
+        Commands::Dotfs { action } => {
             handle_files_command(action, repo).await?;
         }
         Commands::Commit {
@@ -108,7 +108,7 @@ pub async fn run_app(cli: Shelf, repo: Tabs) -> Result<()> {
     Ok(())
 }
 
-async fn handle_files_command(action: &FileAction, mut repo: Tabs) -> Result<()> {
+async fn handle_files_command(action: &FileAction, mut repo: DotFs) -> Result<()> {
     match action {
         FileAction::Track { paths } => handle_file_tracking(paths, &mut repo)?,
         FileAction::Untrack { paths } => handle_file_untracking(paths, &mut repo)?,
@@ -118,13 +118,13 @@ async fn handle_files_command(action: &FileAction, mut repo: Tabs) -> Result<()>
     Ok(())
 }
 
-fn handle_file_saving(repo: &mut Tabs) -> Result<()> {
+fn handle_file_saving(repo: &mut DotFs) -> Result<()> {
     repo.pin_changes().context("Pinning tabs failed")?;
     println!("{}", "Tabs pinned successfully".bright_green());
     Ok(())
 }
 
-fn handle_file_tracking(paths: &[PathBuf], repo: &mut Tabs) -> Result<()> {
+fn handle_file_tracking(paths: &[PathBuf], repo: &mut DotFs) -> Result<()> {
     repo.track(paths).context("Tracking files failed")?;
     for path in paths {
         println!("Tracking {}", path.display().to_string().bright_green());
@@ -132,7 +132,7 @@ fn handle_file_tracking(paths: &[PathBuf], repo: &mut Tabs) -> Result<()> {
     Ok(())
 }
 
-fn handle_file_untracking(paths: &[PathBuf], repo: &mut Tabs) -> Result<()> {
+fn handle_file_untracking(paths: &[PathBuf], repo: &mut DotFs) -> Result<()> {
     repo.untrack(paths).context("Untracking files failed")?;
     for path in paths {
         println!("Untracking {}", path.display().to_string().bright_red());
@@ -140,7 +140,7 @@ fn handle_file_untracking(paths: &[PathBuf], repo: &mut Tabs) -> Result<()> {
     Ok(())
 }
 
-fn display_files(mut repo: Tabs, dirty: bool) -> Result<()> {
+fn display_files(mut repo: DotFs, dirty: bool) -> Result<()> {
     let paths = match dirty {
         true => {
             repo.set_filter(ListFilter::Modified);
@@ -185,12 +185,11 @@ async fn handle_commit_action(
 ) -> Result<String> {
     // Initialize client and get required git info
     let diff = get_staged_diff().context("Getting staged changes failed")?;
-    let commit_history = get_recent_commits(Path::new("."), history, None)
-        .context("Getting recent commits failed")?;
+    let commit_history = get_recent_commits(Path::new("."), history, None).unwrap_or_default(); // Handle first commit case by using empty history if get_recent_commits fails
 
     loop {
         // Generate commit message using AI
-        let msg = generate_commit_message(model, &fixes, &commit_history, &diff).await?;
+        let msg = generate_commit_message(model, fixes, &commit_history, &diff).await?;
         println!("{}", msg);
 
         // Get user action selection
@@ -259,9 +258,21 @@ fn create_git_commit(msg: &str) -> Result<String> {
     let sig = repo.signature()?;
     let tree_id = repo.index()?.write_tree()?;
     let tree = repo.find_tree(tree_id)?;
-    let parent = repo.head()?.peel_to_commit()?;
 
-    repo.commit(Some("HEAD"), &sig, &sig, msg, &tree, &[&parent])?;
+    let parents = match repo.head() {
+        Ok(head) => vec![head.peel_to_commit()?],
+        Err(ref e) if e.code() == git2::ErrorCode::UnbornBranch => vec![],
+        Err(e) => return Err(e.into()),
+    };
+
+    repo.commit(
+        Some("HEAD"),
+        &sig,
+        &sig,
+        msg,
+        &tree,
+        parents.iter().collect::<Vec<_>>().as_slice(),
+    )?;
 
     println!("{}", "Created git commit successfully".bright_green());
     Ok(msg.to_string())
@@ -344,23 +355,19 @@ fn process_commit(
 }
 
 fn should_ignore_commit(commit: &git2::Commit, ignore_patterns: Option<&[&str]>) -> bool {
-    match ignore_patterns {
-        Some(patterns) => match commit.tree() {
-            Ok(tree) => {
-                for pattern in patterns {
-                    if tree.iter().any(|entry| {
-                        entry
-                            .name()
-                            .map(|name| name.contains(pattern))
-                            .unwrap_or(false)
-                    }) {
-                        return true;
-                    }
+    if let Some(patterns) = ignore_patterns {
+        if let Ok(tree) = commit.tree() {
+            for pattern in patterns {
+                if tree.iter().any(|entry| {
+                    entry
+                        .name()
+                        .map(|name| name.contains(pattern))
+                        .unwrap_or(false)
+                }) {
+                    return true;
                 }
             }
-            Err(_) => {}
-        },
-        None => {}
+        }
     }
     false
 }

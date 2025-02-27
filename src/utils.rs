@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use git2::{DiffOptions, Repository};
 use indicatif::{ProgressBar, ProgressStyle};
 
-use crate::tabs::TabsError;
+use crate::dotfs::TabsError;
 
 pub async fn run_with_progress<F, Fut, T>(op: F) -> Result<T>
 where
@@ -41,11 +41,14 @@ fn generate_diff(repo: &Repository) -> Result<git2::Diff<'_>> {
     diff_opts.context_lines(3).patience(true).minimal(true);
 
     // Get head tree and index tree
-    let head_tree = repo
-        .head()
-        .context("Getting repo HEAD failed")?
-        .peel_to_tree()
-        .context("Getting HEAD tree failed")?;
+    let head_tree = match repo.head() {
+        Ok(head) => head.peel_to_tree().context("Getting HEAD tree failed")?,
+        Err(_) => {
+            // Handle first commit case where HEAD doesn't exist yet
+
+            repo.find_tree(repo.treebuilder(None)?.write()?)?
+        }
+    };
 
     let index_tree = repo
         .index()
