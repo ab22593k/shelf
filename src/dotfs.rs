@@ -5,47 +5,65 @@ use std::{
 
 use anyhow::{Result, anyhow};
 use colored::Colorize;
-use git2::{Index, Repository};
+use git2::{Index, Repository, Statuses};
 use thiserror::Error;
-use walkdir::WalkDir;
+use tracing::debug;
 
 use crate::utils::check_git_installation;
 
 const SHELF_BARE_NAME: &str = ".shelf";
 
-/// Manages system configuration files.
+/// Initializes the DotFs repository in the user's home directory for the main application.
+pub fn init_dotfs_repo() -> Result<Repository> {
+    check_git_installation().expect("Git must be installed");
+
+    let work_tree = directories::UserDirs::new()
+        .ok_or(TabsError::HomeDirectoryNotFound)?
+        .home_dir()
+        .canonicalize()?;
+    let git_dir = work_tree.join(SHELF_BARE_NAME);
+
+    let repo = match Repository::open_bare(&git_dir) {
+        Ok(repo) => repo,
+        Err(_) => Repository::init_bare(&git_dir)?,
+    };
+    repo.set_workdir(&work_tree, false)?;
+    Ok(repo)
+}
+
+/// Manages system configuration files using a bare Git repository in the user's home directory.
 pub struct DotFs {
     bare: Repository,
     filter: ListFilter,
-    iter_index: usize, // Tracks iteration progress
+    filtered_entries: Vec<PathBuf>, // Pre-collected entries for iteration
+    iter_index: usize,              // Tracks iteration progress
 }
 
-impl Default for DotFs {
-    fn default() -> Self {
-        check_git_installation().expect("Git must be installed");
+// impl Default for DotFs {
+//     /// Initializes a new `DotFs` instance with a bare Git repository in the user's home directory.
+//     fn default() -> Self {
+//         check_git_installation().expect("Git must be installed");
 
-        let user_dirs = directories::UserDirs::new()
-            .ok_or(TabsError::HomeDirectoryNotFound)
-            .unwrap();
-        let work_tree = user_dirs.home_dir().canonicalize().unwrap();
-        let git_dir = work_tree.join(SHELF_BARE_NAME);
+//         let work_tree = directories::UserDirs::new()
+//             .ok_or(TabsError::HomeDirectoryNotFound)
+//             .unwrap()
+//             .home_dir()
+//             .canonicalize()
+//             .unwrap();
+//         let git_dir = work_tree.join(SHELF_BARE_NAME);
 
-        // First try to open existing repo, otherwise initialize a new one
-        let repo = match Repository::open_bare(&git_dir) {
-            Ok(repo) => repo,
-            Err(_) => Repository::init_bare(&git_dir).unwrap(),
-        };
+//         let repo = Repository::open_bare(&git_dir)
+//             .unwrap_or_else(|_| Repository::init_bare(&git_dir).unwrap());
+//         repo.set_workdir(&work_tree, false).unwrap();
 
-        // Set the working directory for the repository
-        repo.set_workdir(&work_tree, false).unwrap();
-
-        Self {
-            bare: repo,
-            filter: ListFilter::All,
-            iter_index: 0,
-        }
-    }
-}
+//         Self {
+//             bare: repo,
+//             filter: ListFilter::All,
+//             filtered_entries: Vec::new(),
+//             iter_index: 0,
+//         }
+//     }
+// }
 
 #[derive(Error, Debug)]
 pub enum TabsError {
@@ -70,132 +88,80 @@ pub enum TabsError {
 impl Iterator for DotFs {
     type Item = PathBuf;
 
+    /// Returns the next file path matching the current filter, or `None` if exhausted.
     fn next(&mut self) -> Option<Self::Item> {
-        let index = match self.bare.index() {
-            Ok(idx) => idx,
-            Err(_) => return None,
-        };
-
-        let entries: Vec<_> = index.iter().collect();
-
-        while self.iter_index < entries.len() {
-            let entry = &entries[self.iter_index];
-            self.iter_index += 1;
-
-            match self.process_index_entry(entry, self.filter) {
-                Ok(Some(path)) => return Some(path),
-                Ok(None) => continue,
-                Err(_) => continue,
-            }
+        if self.iter_index == 0 {
+            let _ = self.collect_filtered_entries();
         }
 
-        // Reset index when reaching end
-        self.iter_index = 0;
-        None
+        self.filtered_entries
+            .get(self.iter_index)
+            .cloned()
+            .inspect(|_| {
+                self.iter_index += 1;
+            })
     }
 }
 
-/// Filtering criteria for repository listings
+/// Filtering criteria for repository listings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ListFilter {
-    /// Show all `Tab`s without filtering
+    /// Show all tracked files without filtering.
     All,
-    /// Only show modified files in working tree
+    /// Only show files modified in the working tree.
     Modified,
 }
 
 impl DotFs {
+    /// Creates a new `DotFs` instance with the provided repository.
+    pub fn new(bare: Repository) -> Self {
+        Self {
+            bare,
+            filter: ListFilter::All, // Default filter
+            filtered_entries: Vec::new(),
+            iter_index: 0,
+        }
+    }
+
+    /// Tracks the specified paths by adding them to the Git index.
     pub fn track(&mut self, paths: &[PathBuf]) -> Result<()> {
-        // Get repository index once at start
-        let mut index = self.bare.index()?;
+        let mut index = self.get_index()?;
 
-        // Process all paths and collect any errors
         for path in paths {
-            // Validate path before attempting operations
             self.validate_path(path)?;
-
-            // Use appropriate add method based on path type
-            match path.is_dir() {
-                true => self.add_recursive(path, &mut index)?,
-                false => self.add_one(path, &mut index)?,
-            }
+            self.add_path(path, &mut index)?;
         }
 
-        // Write index changes back to disk
-        index.write()?;
+        self.write_index(&mut index)?;
         print_success("Tabs tracked successfully");
         Ok(())
     }
 
+    /// Untracks the specified paths by removing them from the Git index.
     pub fn untrack(&mut self, paths: &[PathBuf]) -> Result<()> {
-        let mut index = self.bare.index()?;
+        let mut index = self.get_index()?;
+
         for path in paths {
             self.validate_path(path)?;
-            if path.is_dir() {
-                WalkDir::new(path)
-                    .into_iter()
-                    .filter_map(Result::ok)
-                    .filter(|e| e.file_type().is_file())
-                    .try_for_each(|e| -> Result<()> {
-                        self.remove_path(e.path(), &mut index)?;
-                        Ok(())
-                    })?;
-            } else {
-                self.remove_path(path, &mut index)?;
-            }
+            self.remove_path_or_dir(path, &mut index)?;
         }
-        index.write()?;
+
+        self.write_index(&mut index)?;
         print_success("Tabs untracked successfully");
         Ok(())
     }
 
-    pub fn matches_filter(&self, path: &Path, filter: ListFilter) -> Result<bool> {
-        match filter {
-            ListFilter::All => Ok(true),
-            ListFilter::Modified => {
-                let relative_path = path.strip_prefix(self.bare.workdir().unwrap())?;
-                let mut status_opts = git2::StatusOptions::new();
-                status_opts.include_untracked(true);
-                status_opts.include_ignored(false);
-                let status = self.bare.status_file(relative_path)?;
-                Ok(status.contains(git2::Status::WT_MODIFIED))
-            }
-        }
-    }
-
-    /// Commits modified files in the repository with a generated message.
-    pub fn pin_changes(&self) -> Result<String> {
-        let mut index = self.bare.index().map_err(TabsError::Git)?;
-
+    /// Commits staged changes with a generated message summarizing the updates.
+    pub fn save_changes(&self) -> Result<String> {
+        let mut index = self.get_index()?;
         let statuses = self.repository_status()?;
-
-        // Verify we have staged files
-        let staged_files = statuses.iter().any(|entry| {
-            entry.status().is_index_new()
-                || entry.status().is_index_modified()
-                || entry.status().is_index_deleted()
-        });
-        if !staged_files {
-            return Err(anyhow!("No staged changes to commit"));
-        }
+        self.verify_staged_changes(&statuses)?;
 
         let tree_oid = index.write_tree()?;
         let tree = self.bare.find_tree(tree_oid)?;
         let signature = self.bare.signature()?;
-
         let commit_message = self.changes_recap(&statuses);
-
-        let parents = match self.bare.head() {
-            Ok(_) => {
-                let commit = self.get_head_commit()?;
-                vec![commit]
-            }
-            Err(_) => {
-                vec![] /* No initial commit yet*/
-            }
-        };
-
-        let parent_refs: Vec<&git2::Commit> = parents.iter().collect();
+        let parents = self.get_parent_commits()?;
 
         self.bare.commit(
             Some("HEAD"),
@@ -203,14 +169,69 @@ impl DotFs {
             &signature,
             &commit_message,
             &tree,
-            &parent_refs,
+            &parents.iter().collect::<Vec<_>>(),
         )?;
 
         Ok(commit_message)
     }
 
-    /// Create a summary of changes for the commit message.
-    fn changes_recap(&self, statuses: &git2::Statuses) -> String {
+    /// Sets the filter for listing files and resets the iterator.
+    pub fn set_filter(&mut self, filter: ListFilter) {
+        if self.filter != filter {
+            self.filter = filter;
+            self.reset_iterator();
+        }
+    }
+
+    /// Collects filtered entries for iteration based on the current filter.
+    fn collect_filtered_entries(&mut self) -> Result<()> {
+        let index = self.get_index()?;
+        self.filtered_entries = index
+            .iter()
+            .filter_map(|entry| self.process_index_entry(&entry).ok().flatten())
+            .collect();
+        Ok(())
+    }
+
+    /// Adds a path (file or directory) to the index.
+    fn add_path(&self, path: &Path, index: &mut Index) -> Result<()> {
+        if path.is_dir() {
+            self.add_recursive(path, index)
+        } else {
+            self.add_one(path, index)
+        }
+    }
+
+    /// Removes a path (file or directory) from the index.
+    fn remove_path_or_dir(&self, path: &Path, index: &mut Index) -> Result<()> {
+        let relative = self.get_relative_path(path)?;
+        index.remove_all([relative], None)?;
+        Ok(())
+    }
+
+    /// Checks if a path matches the current filter.
+    fn matches_filter(&self, path: &Path) -> Result<bool> {
+        match self.filter {
+            ListFilter::All => {
+                debug!("Filter: All - path {} matches", path.display());
+                Ok(true)
+            }
+            ListFilter::Modified => {
+                let relative = self.get_relative_path(path)?;
+                let status = self.bare.status_file(relative)?;
+                let is_modified = status.contains(git2::Status::WT_MODIFIED);
+                debug!(
+                    "Filter: Modified - path {} is modified: {}",
+                    path.display(),
+                    is_modified
+                );
+                Ok(is_modified)
+            }
+        }
+    }
+
+    /// Generates a summary of changes for the commit message.
+    fn changes_recap(&self, statuses: &Statuses) -> String {
         let mut msg = String::from("Tracked tabs updated:\n");
         for entry in statuses.iter() {
             if let Some(path) = entry.path() {
@@ -220,122 +241,117 @@ impl DotFs {
         msg
     }
 
-    /// Gets the HEAD commit of the repository.
-    fn get_head_commit(&self) -> Result<git2::Commit> {
-        let head = self.bare.head()?;
-        let oid = head.target().ok_or_else(|| anyhow!("Detached HEAD"))?;
-        Ok(self.bare.find_commit(oid)?)
-    }
-
-    /// Retrieves status information for all repository files
-    fn repository_status(&self) -> Result<git2::Statuses> {
-        let mut status_options = git2::StatusOptions::new();
-        status_options.include_ignored(false);
-        status_options.include_untracked(true);
-        Ok(self
-            .bare
-            .statuses(Some(&mut status_options))
-            .map_err(TabsError::Git)?)
-    }
-
-    fn process_index_entry(
-        &self,
-        entry: &git2::IndexEntry,
-        filter: ListFilter,
-    ) -> Result<Option<PathBuf>> {
-        let path_str = std::str::from_utf8(&entry.path).map_err(|_| TabsError::InvalidUtf8Path)?;
-        let workdir = self.bare.workdir().ok_or(TabsError::GitNotInstalled)?;
-        let path = workdir.join(path_str);
-
-        self.matches_filter(&path, filter)
-            .map(|matches| matches.then_some(path))
-    }
-
+    /// Validates a path before operations.
     fn validate_path(&self, path: &Path) -> Result<()> {
         if !path.exists() {
             return Err(TabsError::PathNotFound(path.to_path_buf()).into());
         }
-
-        let workdir = self.bare.workdir().ok_or(TabsError::GitNotInstalled)?;
-        if !path.starts_with(workdir) {
+        if !path.starts_with(self.workdir()?) {
             return Err(TabsError::OutsideWorkTree(path.to_path_buf()).into());
         }
-
         Ok(())
     }
 
+    /// Adds a single file to the index.
     fn add_one(&self, path: &Path, index: &mut Index) -> Result<()> {
-        let workdir = self.bare.workdir().ok_or(TabsError::GitNotInstalled)?;
-        path.strip_prefix(workdir)
-            .map_err(TabsError::StripPrefix)
-            .and_then(|relative| index.add_path(relative).map_err(TabsError::Git))?;
+        let relative = self.get_relative_path(path)?;
+        index.add_path(relative)?;
         Ok(())
     }
 
+    /// Recursively adds all files in a directory to the index.
     fn add_recursive(&self, path: &Path, index: &mut Index) -> Result<()> {
-        WalkDir::new(path)
-            .into_iter()
-            .filter_map(Result::ok)
-            .filter(|e| e.file_type().is_file())
-            .try_for_each(|e| self.add_one(e.path(), index))
+        let relative = self.get_relative_path(path)?;
+        index.add_all([relative], git2::IndexAddOption::DEFAULT, None)?;
+        Ok(())
     }
 
-    fn remove_path(&self, path: &Path, index: &mut Index) -> Result<bool> {
-        let workdir = self.bare.workdir().ok_or(TabsError::GitNotInstalled)?;
-        Ok(path
-            .strip_prefix(workdir)
-            .map_err(TabsError::StripPrefix)?
-            .to_str()
-            .ok_or(TabsError::InvalidUtf8Path)
-            .map(|relative| index.remove_path(Path::new(relative)).is_ok())?)
+    /// Processes an index entry and applies the filter.
+    fn process_index_entry(&self, entry: &git2::IndexEntry) -> Result<Option<PathBuf>> {
+        let path_str = std::str::from_utf8(&entry.path).map_err(|_| TabsError::InvalidUtf8Path)?;
+        let path = self.workdir()?.join(path_str);
+        self.matches_filter(&path)
+            .map(|matches| matches.then_some(path))
     }
 
-    // Helper method to reset iterator state
-    fn reset_iterator(&mut self) {
-        self.iter_index = 0;
-    }
-
-    pub fn set_filter(&mut self, filter: ListFilter) {
-        if self.filter != filter {
-            self.filter = filter;
-            self.reset_iterator();
+    /// Retrieves the parent commits for the current HEAD.
+    fn get_parent_commits(&self) -> Result<Vec<git2::Commit>> {
+        match self.bare.head() {
+            Ok(head) => {
+                match head.target() {
+                    Some(oid) => match self.bare.find_commit(oid) {
+                        Ok(commit) => Ok(vec![commit]),
+                        Err(e) => Err(e.into()),
+                    },
+                    None => Ok(vec![]), // Detached HEAD, return empty vec
+                }
+            }
+            Err(_) => Ok(vec![]), // No HEAD, return empty vec
         }
     }
+
+    /// Retrieves the repository index.
+    fn get_index(&self) -> Result<Index> {
+        Ok(self.bare.index().map_err(TabsError::Git)?)
+    }
+
+    /// Writes the index to disk.
+    fn write_index(&self, index: &mut Index) -> Result<()> {
+        index.write().map_err(TabsError::Git)?;
+        Ok(())
+    }
+
+    /// Gets the working directory of the repository.
+    fn workdir(&self) -> Result<&Path> {
+        self.bare.workdir().ok_or(TabsError::GitNotInstalled.into())
+    }
+
+    /// Computes the relative path from the working directory.
+    fn get_relative_path<'a>(&self, path: &'a Path) -> Result<&'a Path> {
+        Ok(path.strip_prefix(self.workdir()?)?)
+    }
+
+    /// Retrieves the repository status.
+    fn repository_status(&self) -> Result<Statuses> {
+        let mut opts = git2::StatusOptions::new();
+        opts.include_ignored(false).include_untracked(true);
+        Ok(self.bare.statuses(Some(&mut opts))?)
+    }
+
+    /// Verifies that there are staged changes to commit.
+    fn verify_staged_changes(&self, statuses: &Statuses) -> Result<()> {
+        let has_changes = statuses.iter().any(|entry| {
+            entry.status().is_index_new()
+                || entry.status().is_index_modified()
+                || entry.status().is_index_deleted()
+        });
+        has_changes
+            .then_some(())
+            .ok_or_else(|| anyhow!("No staged changes to commit"))
+    }
+
+    /// Resets the iterator state.
+    fn reset_iterator(&mut self) {
+        self.iter_index = 0;
+        self.filtered_entries.clear();
+    }
 }
 
-/// Success message with consistent styling formats
+/// Prints a styled success message.
 fn print_success(message: &str) {
     println!("{} {}", "✓".bright_green(), message.bold().green());
-}
-
-/// Verifies existence of staged changes
-#[allow(dead_code)]
-fn verify_staged_changes(index: &Index) -> Result<()> {
-    let has_changes = index.iter().any(|entry| {
-        let status = git2::Status::from_bits_truncate(entry.ino);
-        status.is_index_new() || status.is_index_modified() || status.is_index_deleted()
-    });
-
-    has_changes
-        .then_some(())
-        .ok_or_else(|| anyhow!("No changes to commit"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use once_cell::sync::Lazy;
     #[cfg(unix)]
     use std::os::unix::fs::symlink;
     #[cfg(windows)]
     use std::os::windows::fs::symlink_file as symlink;
-    use std::sync::Mutex;
     use std::{env, fs};
     use tempfile::tempdir;
     use tracing::debug;
-
-    // Global lock for environment-sensitive tests
-    static ENV_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
     //-------------------------
     // Test Helpers
@@ -347,33 +363,34 @@ mod tests {
     }
 
     impl TestEnv {
-        fn new() -> Result<Self> {
+        pub fn new() -> Result<Self> {
+            // Initialize logging if needed
             init_test_logging();
 
-            let _lock = ENV_LOCK.lock().unwrap(); // Acquire lock first
-
+            // Create a temporary directory
             let temp_dir = tempdir()?;
+            let work_tree = temp_dir.path();
+            let git_dir = work_tree.join(SHELF_BARE_NAME);
 
-            // Create .shelf directory before changing HOME
-            std::fs::create_dir_all(temp_dir.path().join(SHELF_BARE_NAME))?;
+            // Initialize a bare repository in the temp directory
+            fs::create_dir_all(&git_dir)?;
+            let repo = Repository::init_bare(&git_dir)?;
+            repo.set_workdir(work_tree, false)?;
 
-            // Set the HOME environment variable
-            unsafe {
-                env::set_var("HOME", temp_dir.path());
-            }
+            // Create DotFs with the isolated repository
+            let manager = DotFs::new(repo);
 
             Ok(Self {
                 _temp_dir: temp_dir,
-                manager: DotFs::default(),
+                manager,
             })
         }
 
-        fn workdir(&self) -> &Path {
+        pub fn workdir(&self) -> &Path {
             self.manager.bare.workdir().expect("Valid workdir")
         }
 
-        fn create_test_file(&self, path: &str) -> PathBuf {
-            debug!("Creating test file: {}", path);
+        pub fn create_test_file(&self, path: &str) -> PathBuf {
             let full_path = self.workdir().join(path);
             fs::create_dir_all(full_path.parent().unwrap()).unwrap();
             fs::write(&full_path, "test content").unwrap();
@@ -409,13 +426,6 @@ mod tests {
             result.sort(); // Sort paths for consistent comparison
             result
         }
-
-        // Helper to reset repository state
-        fn clear_index(&mut self) -> Result<()> {
-            // Create a new empty repository to reset state
-            self.manager = DotFs::default();
-            Ok(())
-        }
     }
 
     fn init_test_logging() {
@@ -446,17 +456,15 @@ mod tests {
     #[test]
     fn git_installation_detection() -> Result<()> {
         debug!("Testing git installation detection");
-        let _lock = ENV_LOCK.lock().unwrap();
         let original_path = env::var_os("PATH");
 
-        // Test missing git
-        // SAFETY: Test environment with mutex lock ensuring no concurrent access
+        // SAFETY: Test environment should run without concurrent access
         unsafe { env::set_var("PATH", "") }
         let err = check_git_installation().unwrap_err();
         let tabs_err = err.downcast_ref::<TabsError>().unwrap();
         assert!(tabs_err.is_git_not_installed());
 
-        // SAFETY: Test environment with mutex lock ensuring no concurrent access
+        // SAFETY: Test environment should run without concurrent access
         // Restoring original PATH value
         unsafe { env::set_var("PATH", original_path.unwrap_or_default()) }
         assert!(check_git_installation().is_ok());
@@ -485,9 +493,6 @@ mod tests {
     fn tracking_untracking_single_file() -> Result<()> {
         debug!("Testing tracking/untracking single file");
         let mut env = TestEnv::new()?;
-
-        // Start with clean state
-        env.clear_index()?;
 
         let test_file = env.create_test_file("test.txt");
 
@@ -572,9 +577,6 @@ mod tests {
         debug!("Testing modified files filter");
         let mut env = TestEnv::new()?;
 
-        // Start with clean state
-        env.clear_index()?;
-
         // Configure git user for commits before any operations
         env.manager.bare.config()?.set_str("user.name", "test")?;
         env.manager
@@ -593,7 +595,7 @@ mod tests {
 
         // Initial tracking and commit
         env.manager.track(&[test_file.clone()])?;
-        env.manager.pin_changes()?;
+        env.manager.save_changes()?;
 
         env.manager.set_filter(ListFilter::Modified);
 
@@ -623,7 +625,7 @@ mod tests {
 
         // Stage changes
         env.manager.track(&[test_file.clone()])?;
-        env.manager.pin_changes()?;
+        env.manager.save_changes()?;
 
         assert!(env.tracked_paths().is_empty(), "After staging");
 
@@ -634,11 +636,6 @@ mod tests {
         debug!("Testing special files handling");
         let mut env = TestEnv::new()?;
         let target = env.create_test_file("target.txt");
-
-        // Clear out any existing index state to avoid lock issues
-        if let Ok(mut index) = env.manager.bare.index() {
-            index.clear()?;
-        }
 
         env.manager.track(&[target.clone()])?;
 
@@ -670,9 +667,6 @@ mod tests {
     fn filter_mode_selection_works() -> Result<()> {
         debug!("Testing filter mode selection");
         let mut env = TestEnv::new()?;
-
-        // Start with clean state
-        env.clear_index()?;
 
         // Configure git user for commits
         env.manager.bare.config()?.set_str("user.name", "test")?;
@@ -710,9 +704,6 @@ mod tests {
         debug!("Testing symlink tracking");
         let mut env = TestEnv::new()?;
 
-        // Start with clean state
-        env.clear_index()?;
-
         // Configure git user for commits
         env.manager.bare.config()?.set_str("user.name", "test")?;
         env.manager
@@ -746,6 +737,88 @@ mod tests {
         // Original files should still exist
         assert!(target.exists(), "Target file should exist");
         assert!(link.exists(), "Symlink should exist");
+
+        Ok(())
+    }
+
+    #[test]
+    fn tracking_multiple_files_and_directories() -> Result<()> {
+        let mut env = TestEnv::new()?;
+        let file1 = env.create_test_file("file1.txt");
+        let file2 = env.create_test_file("file2.txt");
+        let dir = env.create_test_dir("dir");
+        let file_in_dir = env.create_test_file("dir/file3.txt");
+
+        env.manager
+            .track(&[file1.clone(), file2.clone(), dir.clone()])?;
+        let tracked = env.tracked_paths();
+        assert!(tracked.contains(&file1));
+        assert!(tracked.contains(&file2));
+        assert!(tracked.contains(&file_in_dir));
+
+        Ok(())
+    }
+
+    #[test]
+    fn untracking_non_tracked_file() -> Result<()> {
+        let mut env = TestEnv::new()?;
+        let file = env.create_test_file("file.txt");
+
+        // Attempt to untrack a file that isn't tracked
+        let result = env.manager.untrack(&[file.clone()]);
+        assert!(
+            result.is_ok(),
+            "Untracking non-tracked file should not fail"
+        );
+
+        // Verify that the file still exists and nothing was changed
+        assert!(file.exists());
+        assert!(env.tracked_paths().is_empty());
+
+        Ok(())
+    }
+
+    #[test]
+    fn commit_with_no_staged_changes() -> Result<()> {
+        let env = TestEnv::new()?;
+
+        // Attempt to commit without staging any changes
+        let result = env.manager.save_changes();
+        assert!(
+            result.is_err(),
+            "Committing with no staged changes should fail"
+        );
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "No staged changes to commit"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn iterator_behavior_with_filters() -> Result<()> {
+        let mut env = TestEnv::new()?;
+        let file1 = env.create_test_file("file1.txt");
+        let file2 = env.create_test_file("file2.txt");
+
+        env.manager.track(&[file1.clone(), file2.clone()])?;
+
+        // Set filter to All
+        env.manager.set_filter(ListFilter::All);
+        let tracked_all: Vec<_> = env.tracked_paths();
+        assert_eq!(tracked_all.len(), 2);
+        assert!(tracked_all.contains(&file1));
+        assert!(tracked_all.contains(&file2));
+
+        // Modify file1
+        fs::write(&file1, "modified content")?;
+
+        // Set filter to Modified
+        env.manager.set_filter(ListFilter::Modified);
+        let tracked_modified: Vec<_> = env.tracked_paths();
+        assert_eq!(tracked_modified.len(), 1);
+        assert!(tracked_modified.contains(&file1));
 
         Ok(())
     }

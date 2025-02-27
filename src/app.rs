@@ -119,7 +119,7 @@ async fn handle_files_command(action: &FileAction, mut repo: DotFs) -> Result<()
 }
 
 fn handle_file_saving(repo: &mut DotFs) -> Result<()> {
-    repo.pin_changes().context("Pinning tabs failed")?;
+    repo.save_changes().context("Pinning tabs failed")?;
     println!("{}", "Tabs pinned successfully".bright_green());
     Ok(())
 }
