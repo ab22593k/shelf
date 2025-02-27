@@ -156,6 +156,7 @@ impl DotFs {
                 let relative_path = path.strip_prefix(self.bare.workdir().unwrap())?;
                 let mut status_opts = git2::StatusOptions::new();
                 status_opts.include_untracked(true);
+                status_opts.include_ignored(false);
                 let status = self.bare.status_file(relative_path)?;
                 Ok(status.contains(git2::Status::WT_MODIFIED))
             }
@@ -229,6 +230,8 @@ impl DotFs {
     /// Retrieves status information for all repository files
     fn repository_status(&self) -> Result<git2::Statuses> {
         let mut status_options = git2::StatusOptions::new();
+        status_options.include_ignored(false);
+        status_options.include_untracked(true);
         Ok(self
             .bare
             .statuses(Some(&mut status_options))
@@ -359,12 +362,9 @@ mod tests {
                 env::set_var("HOME", temp_dir.path());
             }
 
-            // Create a fresh instance for each test
-            let manager = DotFs::default();
-
             Ok(Self {
                 _temp_dir: temp_dir,
-                manager,
+                manager: DotFs::default(),
             })
         }
 
@@ -491,6 +491,11 @@ mod tests {
 
         let test_file = env.create_test_file("test.txt");
 
+        // Clear out any existing index state
+        if let Ok(mut index) = env.manager.bare.index() {
+            index.clear()?;
+        }
+
         // Track and verify
         env.manager.track(&[test_file.clone()])?;
         let tracked = env.tracked_paths();
@@ -579,14 +584,16 @@ mod tests {
 
         let test_file = env.create_test_file("test.txt");
 
+        // Configure git user for commits
+        env.manager.bare.config()?.set_str("user.name", "test")?;
+        env.manager
+            .bare
+            .config()?
+            .set_str("user.email", "test@example.com")?;
+
         // Initial tracking and commit
         env.manager.track(&[test_file.clone()])?;
         env.manager.pin_changes()?;
-
-        // Give Windows time to process the commit
-        if cfg!(windows) {
-            std::thread::sleep(std::time::Duration::from_millis(500));
-        }
 
         env.manager.set_filter(ListFilter::Modified);
 
@@ -596,15 +603,21 @@ mod tests {
         // Modify file
         fs::write(&test_file, "new content")?;
 
-        // Give Windows time to detect changes
-        if cfg!(windows) {
-            std::thread::sleep(std::time::Duration::from_millis(500));
-        }
-
-        // Force reload index to detect changes
-        env.manager.bare.index()?.read(true)?;
-
         let tracked = env.tracked_paths();
+
+        // NOTE: On Windows, git may normalize line endings, so the status check *after* writing might differ.
+        // We re-read the status to check for WT_MODIFIED *after* the write operation.
+        let relative_path = test_file.strip_prefix(env.workdir()).unwrap();
+        let mut status_opts = git2::StatusOptions::new();
+        status_opts.include_untracked(true);
+        status_opts.include_ignored(false);
+
+        let status = env.manager.bare.status_file(relative_path)?;
+        assert!(
+            status.contains(git2::Status::WT_MODIFIED),
+            "File should be modified"
+        );
+
         assert_eq!(tracked.len(), 1, "After modification");
         assert_eq!(tracked[0], test_file);
 
@@ -612,38 +625,28 @@ mod tests {
         env.manager.track(&[test_file.clone()])?;
         env.manager.pin_changes()?;
 
-        // Give Windows time to process staging
-        if cfg!(windows) {
-            std::thread::sleep(std::time::Duration::from_millis(500));
-        }
-
         assert!(env.tracked_paths().is_empty(), "After staging");
 
         Ok(())
     }
-
     #[test]
     fn special_files_handling() -> Result<()> {
         debug!("Testing special files handling");
         let mut env = TestEnv::new()?;
-
-        // Start with clean state
-        env.clear_index()?;
-
-        // Configure git user for commits
-        env.manager.bare.config()?.set_str("user.name", "test")?;
-        env.manager
-            .bare
-            .config()?
-            .set_str("user.email", "test@example.com")?;
-
         let target = env.create_test_file("target.txt");
+
+        // Clear out any existing index state to avoid lock issues
+        if let Ok(mut index) = env.manager.bare.index() {
+            index.clear()?;
+        }
 
         env.manager.track(&[target.clone()])?;
 
         // Store tracked paths and sort for consistent comparison
-        let tracked = env.tracked_paths();
-        let expected = vec![target];
+        let mut tracked = env.tracked_paths();
+        tracked.sort();
+        let mut expected = vec![target];
+        expected.sort();
 
         assert_eq!(tracked, expected, "Tracked paths did not match expected");
 

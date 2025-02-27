@@ -33,7 +33,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
       - name: Run tests
-        run: cargo test --verbose
+        run: cargo test --verbose -- --test-threads=1
 
   style:
     strategy:
