@@ -1,12 +1,12 @@
 pub mod app;
 mod commit;
+pub mod dotfs;
 mod review;
 mod shell;
-pub mod tabs;
 mod utils;
 
 use crate::app::{Shelf, run_app};
-use crate::tabs::Tabs;
+use crate::dotfs::DotFs;
 use anyhow::Result;
 use clap::Parser;
 use colored::Colorize;
@@ -43,7 +43,7 @@ async fn main() -> Result<()> {
     colored::control::set_override(true);
 
     let cli = Shelf::parse();
-    let repo = Tabs::default();
+    let repo = DotFs::default();
 
     if let Err(err) = run_app(cli, repo).await {
         eprintln!("Error: {}", err.to_string().red());

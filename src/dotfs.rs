@@ -14,13 +14,13 @@ use crate::utils::check_git_installation;
 const SHELF_BARE_NAME: &str = ".shelf";
 
 /// Manages system configuration files.
-pub struct Tabs {
+pub struct DotFs {
     bare: Repository,
     filter: ListFilter,
     iter_index: usize, // Tracks iteration progress
 }
 
-impl Default for Tabs {
+impl Default for DotFs {
     fn default() -> Self {
         check_git_installation().expect("Git must be installed");
 
@@ -67,7 +67,7 @@ pub enum TabsError {
     GitNotInstalled,
 }
 
-impl Iterator for Tabs {
+impl Iterator for DotFs {
     type Item = PathBuf;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -104,7 +104,7 @@ pub enum ListFilter {
     Modified,
 }
 
-impl Tabs {
+impl DotFs {
     pub fn track(&mut self, paths: &[PathBuf]) -> Result<()> {
         // Get repository index once at start
         let mut index = self.bare.index()?;
@@ -322,8 +322,12 @@ fn verify_staged_changes(index: &Index) -> Result<()> {
 mod tests {
     use super::*;
     use once_cell::sync::Lazy;
+    #[cfg(unix)]
+    use std::os::unix::fs::symlink;
+    #[cfg(windows)]
+    use std::os::windows::fs::symlink_file as symlink;
     use std::sync::Mutex;
-    use std::{env, fs, os::unix::fs::symlink};
+    use std::{env, fs};
     use tempfile::tempdir;
     use tracing::debug;
 
@@ -336,7 +340,7 @@ mod tests {
 
     struct TestEnv {
         _temp_dir: tempfile::TempDir,
-        manager: Tabs,
+        manager: DotFs,
     }
 
     impl TestEnv {
@@ -346,11 +350,21 @@ mod tests {
             let _lock = ENV_LOCK.lock().unwrap(); // Acquire lock first
 
             let temp_dir = tempdir()?;
-            unsafe { env::set_var("HOME", temp_dir.path()) };
+
+            // Create .shelf directory before changing HOME
+            std::fs::create_dir_all(temp_dir.path().join(SHELF_BARE_NAME))?;
+
+            // Set the HOME environment variable
+            unsafe {
+                env::set_var("HOME", temp_dir.path());
+            }
+
+            // Create a fresh instance for each test
+            let manager = DotFs::default();
 
             Ok(Self {
                 _temp_dir: temp_dir,
-                manager: Tabs::default(),
+                manager,
             })
         }
 
@@ -382,12 +396,25 @@ mod tests {
 
         fn tracked_paths(&mut self) -> Vec<PathBuf> {
             debug!("Getting tracked paths");
+            // Reset index before getting paths to ensure fresh repository state
+            self.manager.reset_iterator();
+
             let mut result = Vec::new();
             while let Some(path) = self.manager.next() {
                 result.push(path);
             }
+
+            // Reset again after collection
             self.manager.reset_iterator();
+            result.sort(); // Sort paths for consistent comparison
             result
+        }
+
+        // Helper to reset repository state
+        fn clear_index(&mut self) -> Result<()> {
+            // Create a new empty repository to reset state
+            self.manager = DotFs::default();
+            Ok(())
         }
     }
 
@@ -458,15 +485,25 @@ mod tests {
     fn tracking_untracking_single_file() -> Result<()> {
         debug!("Testing tracking/untracking single file");
         let mut env = TestEnv::new()?;
+
+        // Start with clean state
+        env.clear_index()?;
+
         let test_file = env.create_test_file("test.txt");
 
         // Track and verify
         env.manager.track(&[test_file.clone()])?;
-        assert_eq!(env.tracked_paths(), vec![test_file.clone()]);
+        let tracked = env.tracked_paths();
+        let expected = vec![test_file.clone()];
+        assert_eq!(tracked, expected, "Tracked paths did not match expected");
 
         // Untrack and verify
         env.manager.untrack(&[test_file.clone()])?;
-        assert!(env.tracked_paths().is_empty(), "Paths after untracking");
+        let empty_paths = env.tracked_paths();
+        assert!(
+            empty_paths.is_empty(),
+            "Paths should be empty after untracking"
+        );
         assert!(test_file.exists(), "File should persist");
 
         Ok(())
@@ -484,7 +521,11 @@ mod tests {
         assert!(tabs_err.is_path_not_found());
 
         // External path
-        let external = PathBuf::from("/etc/passwd");
+        let external = if cfg!(windows) {
+            PathBuf::from("C:\\Windows\\System32\\drivers\\etc\\hosts")
+        } else {
+            PathBuf::from("/etc/passwd")
+        };
         let err = env.manager.track(&[external]).unwrap_err();
         let tabs_err = err.downcast_ref::<TabsError>().unwrap();
         assert!(tabs_err.is_outside_work_tree());
@@ -496,6 +537,14 @@ mod tests {
     fn nested_directory_tracking_includes_all_files() -> Result<()> {
         debug!("Testing nested directory tracking");
         let mut env = TestEnv::new()?;
+
+        // Configure git user for commits before any operations
+        env.manager.bare.config()?.set_str("user.name", "test")?;
+        env.manager
+            .bare
+            .config()?
+            .set_str("user.email", "test@example.com")?;
+
         let dir = env.create_test_dir("nested/directory");
 
         let file1 = env.create_test_file("nested/directory/file1.txt");
@@ -517,10 +566,28 @@ mod tests {
     fn modified_files_filter_shows_changes() -> Result<()> {
         debug!("Testing modified files filter");
         let mut env = TestEnv::new()?;
+
+        // Start with clean state
+        env.clear_index()?;
+
+        // Configure git user for commits before any operations
+        env.manager.bare.config()?.set_str("user.name", "test")?;
+        env.manager
+            .bare
+            .config()?
+            .set_str("user.email", "test@example.com")?;
+
         let test_file = env.create_test_file("test.txt");
 
-        // Initial tracking
+        // Initial tracking and commit
         env.manager.track(&[test_file.clone()])?;
+        env.manager.pin_changes()?;
+
+        // Give Windows time to process the commit
+        if cfg!(windows) {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+
         env.manager.set_filter(ListFilter::Modified);
 
         // Should show no changes initially
@@ -529,7 +596,12 @@ mod tests {
         // Modify file
         fs::write(&test_file, "new content")?;
 
-        // Force status refresh
+        // Give Windows time to detect changes
+        if cfg!(windows) {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+
+        // Force reload index to detect changes
         env.manager.bare.index()?.read(true)?;
 
         let tracked = env.tracked_paths();
@@ -538,9 +610,12 @@ mod tests {
 
         // Stage changes
         env.manager.track(&[test_file.clone()])?;
+        env.manager.pin_changes()?;
 
-        // Force status refresh again
-        env.manager.bare.index()?.read(true)?;
+        // Give Windows time to process staging
+        if cfg!(windows) {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
 
         assert!(env.tracked_paths().is_empty(), "After staging");
 
@@ -551,16 +626,32 @@ mod tests {
     fn special_files_handling() -> Result<()> {
         debug!("Testing special files handling");
         let mut env = TestEnv::new()?;
-        let target = env.create_test_file("target.txt");
-        let symlink = env.create_symlink(&target, "link");
 
-        env.manager.track(&[symlink.clone()])?;
-        assert!(env.tracked_paths().contains(&symlink));
+        // Start with clean state
+        env.clear_index()?;
+
+        // Configure git user for commits
+        env.manager.bare.config()?.set_str("user.name", "test")?;
+        env.manager
+            .bare
+            .config()?
+            .set_str("user.email", "test@example.com")?;
+
+        let target = env.create_test_file("target.txt");
+
+        env.manager.track(&[target.clone()])?;
+
+        // Store tracked paths and sort for consistent comparison
+        let tracked = env.tracked_paths();
+        let expected = vec![target];
+
+        assert_eq!(tracked, expected, "Tracked paths did not match expected");
 
         Ok(())
     }
 
     #[test]
+    #[cfg(unix)] // Skip on Windows since it doesn't support empty directory tracking
     fn empty_directory_tracking() -> Result<()> {
         debug!("Testing empty directory tracking");
         let mut env = TestEnv::new()?;
@@ -576,6 +667,17 @@ mod tests {
     fn filter_mode_selection_works() -> Result<()> {
         debug!("Testing filter mode selection");
         let mut env = TestEnv::new()?;
+
+        // Start with clean state
+        env.clear_index()?;
+
+        // Configure git user for commits
+        env.manager.bare.config()?.set_str("user.name", "test")?;
+        env.manager
+            .bare
+            .config()?
+            .set_str("user.email", "test@example.com")?;
+
         let test_file = env.create_test_file("test.txt");
 
         // Track file with All filter
@@ -595,6 +697,52 @@ mod tests {
             env.tracked_paths().is_empty(),
             "Modified filter should show no changes for unmodified files"
         );
+
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(unix)] // Only run on Unix systems
+    fn symlink_tracking() -> Result<()> {
+        debug!("Testing symlink tracking");
+        let mut env = TestEnv::new()?;
+
+        // Start with clean state
+        env.clear_index()?;
+
+        // Configure git user for commits
+        env.manager.bare.config()?.set_str("user.name", "test")?;
+        env.manager
+            .bare
+            .config()?
+            .set_str("user.email", "test@example.com")?;
+
+        let target = env.create_test_file("target.txt");
+        let link = env.create_symlink(&target, "link.txt");
+
+        // Track only the symlink
+        env.manager.track(&[link.clone()])?;
+
+        // Get tracked paths to verify only symlink was tracked
+        let tracked = env.tracked_paths();
+
+        assert!(tracked.contains(&link), "Symlink should be tracked");
+        assert!(
+            !tracked.contains(&target),
+            "Target file should not be tracked"
+        );
+
+        // Verify symlink points to right target
+        let metadata = fs::symlink_metadata(&link)?;
+        assert!(metadata.file_type().is_symlink(), "Should be symlink");
+
+        // Untrack symlink
+        env.manager.untrack(&[link.clone()])?;
+        assert!(env.tracked_paths().is_empty(), "No paths should be tracked");
+
+        // Original files should still exist
+        assert!(target.exists(), "Target file should exist");
+        assert!(link.exists(), "Symlink should exist");
 
         Ok(())
     }

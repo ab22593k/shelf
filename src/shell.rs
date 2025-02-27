@@ -1,5 +1,5 @@
 use anyhow::Result;
-use clap_complete::{generate, Generator};
+use clap_complete::{Generator, generate};
 
 /// Generates a shell completion script as a UTF-8 string.
 ///
