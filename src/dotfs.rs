@@ -4,12 +4,11 @@ use std::{
 };
 
 use anyhow::{Result, anyhow};
-use colored::Colorize;
 use git2::{Index, Repository, Statuses};
 use thiserror::Error;
 use tracing::debug;
 
-use crate::utils::check_git_installation;
+use crate::utils::{check_git_installation, print_success};
 
 const SHELF_BARE_NAME: &str = ".shelf";
 
@@ -38,32 +37,6 @@ pub struct DotFs {
     filtered_entries: Vec<PathBuf>, // Pre-collected entries for iteration
     iter_index: usize,              // Tracks iteration progress
 }
-
-// impl Default for DotFs {
-//     /// Initializes a new `DotFs` instance with a bare Git repository in the user's home directory.
-//     fn default() -> Self {
-//         check_git_installation().expect("Git must be installed");
-
-//         let work_tree = directories::UserDirs::new()
-//             .ok_or(TabsError::HomeDirectoryNotFound)
-//             .unwrap()
-//             .home_dir()
-//             .canonicalize()
-//             .unwrap();
-//         let git_dir = work_tree.join(SHELF_BARE_NAME);
-
-//         let repo = Repository::open_bare(&git_dir)
-//             .unwrap_or_else(|_| Repository::init_bare(&git_dir).unwrap());
-//         repo.set_workdir(&work_tree, false).unwrap();
-
-//         Self {
-//             bare: repo,
-//             filter: ListFilter::All,
-//             filtered_entries: Vec::new(),
-//             iter_index: 0,
-//         }
-//     }
-// }
 
 #[derive(Error, Debug)]
 pub enum TabsError {
@@ -335,11 +308,6 @@ impl DotFs {
         self.iter_index = 0;
         self.filtered_entries.clear();
     }
-}
-
-/// Prints a styled success message.
-fn print_success(message: &str) {
-    println!("{} {}", "✓".bright_green(), message.bold().green());
 }
 
 #[cfg(test)]

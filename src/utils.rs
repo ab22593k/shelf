@@ -1,6 +1,7 @@
 use std::{future::Future, path::Path, time::Duration};
 
 use anyhow::{Context, Result};
+use colored::Colorize;
 use git2::{DiffOptions, Repository};
 use indicatif::{ProgressBar, ProgressStyle};
 
@@ -22,6 +23,11 @@ where
     let result = op().await?;
     spinner.finish_and_clear();
     Ok(result)
+}
+
+/// Prints a styled success message.
+pub fn print_success(message: &str) {
+    println!("{} {}", "✓".bright_green(), message.bold().green());
 }
 
 pub fn check_git_installation() -> Result<bool> {
