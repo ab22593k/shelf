@@ -5,7 +5,7 @@ use colored::Colorize;
 use git2::{DiffOptions, Repository};
 use indicatif::{ProgressBar, ProgressStyle};
 
-use crate::dotfs::TabsError;
+use crate::dotfs::DotFsError;
 
 pub async fn run_with_progress<F, Fut, T>(op: F) -> Result<T>
 where
@@ -31,7 +31,7 @@ pub fn print_success(message: &str) {
 }
 
 pub fn check_git_installation() -> Result<bool> {
-    which::which("git").map_err(|_| TabsError::GitNotInstalled)?;
+    which::which("git").map_err(|_| DotFsError::GitNotInstalled)?;
     Ok(true)
 }
 

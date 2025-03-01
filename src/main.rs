@@ -1,9 +1,11 @@
-pub mod app;
 mod commit;
-pub mod dotfs;
+// mod github;
 mod review;
 mod shell;
 mod utils;
+
+pub mod app;
+pub mod dotfs;
 
 use crate::app::{Shelf, run_app};
 use crate::dotfs::DotFs;
@@ -43,17 +45,7 @@ async fn main() -> Result<()> {
     colored::control::set_override(true);
 
     let cli = Shelf::parse();
-
-    // Create git repository instance
-    let repo = match git2::Repository::open(".") {
-        Ok(repo) => repo,
-        Err(e) => {
-            eprintln!("Error opening git repository: {}", e.to_string().red());
-            process::exit(1);
-        }
-    };
-
-    let dotfs = DotFs::new(repo);
+    let dotfs = DotFs::default();
 
     if let Err(err) = run_app(cli, dotfs).await {
         eprintln!("Error: {}", err.to_string().red());

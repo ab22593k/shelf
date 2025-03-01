@@ -8,6 +8,7 @@ use std::{
     collections,
     path::{Path, PathBuf},
 };
+use tracing::debug;
 
 use crate::{
     commit::MsgCompletion,
@@ -78,14 +79,14 @@ pub enum FileAction {
         #[arg(short, long)]
         dirty: bool,
     },
-    /// Pin files for management.
+    /// Save files for management.
     Save,
 }
 
 pub async fn run_app(cli: Shelf, repo: DotFs) -> Result<()> {
     match &cli.command {
         Commands::Dotfs { action } => {
-            handle_files_command(action, repo).await?;
+            handle_dotfs_command(action, repo).await?;
         }
         Commands::Commit {
             model,
@@ -108,23 +109,28 @@ pub async fn run_app(cli: Shelf, repo: DotFs) -> Result<()> {
     Ok(())
 }
 
-async fn handle_files_command(action: &FileAction, mut repo: DotFs) -> Result<()> {
+async fn handle_dotfs_command(action: &FileAction, mut repo: DotFs) -> Result<()> {
     match action {
-        FileAction::Track { paths } => handle_file_tracking(paths, &mut repo)?,
-        FileAction::Untrack { paths } => handle_file_untracking(paths, &mut repo)?,
+        FileAction::Track { paths } => tracking_handler(paths, &mut repo)?,
+        FileAction::Untrack { paths } => untracking_handler(paths, &mut repo)?,
         FileAction::List { dirty } => display_files(repo, *dirty)?,
-        FileAction::Save => handle_file_saving(&mut repo)?,
+        FileAction::Save {} => saving_handler(&mut repo).await?,
     }
     Ok(())
 }
 
-fn handle_file_saving(repo: &mut DotFs) -> Result<()> {
-    repo.save_changes().context("Pinning tabs failed")?;
-    println!("{}", "Tabs pinned successfully".bright_green());
+async fn saving_handler(repo: &mut DotFs) -> Result<()> {
+    // Save changes locally
+    if let Err(e) = repo.save_local_changes() {
+        return Err(anyhow!(format!("Failed to save dotfs changes: {}", e)));
+    }
+
+    println!("{}", "DotFs saved successfully".bright_green());
+
     Ok(())
 }
 
-fn handle_file_tracking(paths: &[PathBuf], repo: &mut DotFs) -> Result<()> {
+fn tracking_handler(paths: &[PathBuf], repo: &mut DotFs) -> Result<()> {
     repo.track(paths).context("Tracking files failed")?;
     for path in paths {
         println!("Tracking {}", path.display().to_string().bright_green());
@@ -132,7 +138,7 @@ fn handle_file_tracking(paths: &[PathBuf], repo: &mut DotFs) -> Result<()> {
     Ok(())
 }
 
-fn handle_file_untracking(paths: &[PathBuf], repo: &mut DotFs) -> Result<()> {
+fn untracking_handler(paths: &[PathBuf], repo: &mut DotFs) -> Result<()> {
     repo.untrack(paths).context("Untracking files failed")?;
     for path in paths {
         println!("Untracking {}", path.display().to_string().bright_red());
@@ -141,6 +147,7 @@ fn handle_file_untracking(paths: &[PathBuf], repo: &mut DotFs) -> Result<()> {
 }
 
 fn display_files(mut repo: DotFs, dirty: bool) -> Result<()> {
+    debug!("Displaying files with dirty: {}", dirty);
     let paths = match dirty {
         true => {
             repo.set_filter(ListFilter::Modified);
@@ -150,17 +157,40 @@ fn display_files(mut repo: DotFs, dirty: bool) -> Result<()> {
     };
     let paths_by_dir = group_tabs_by_directory(paths);
 
-    for (dir, files) in paths_by_dir {
+    // Get the home directory for displaying relative paths
+    let user_dirs = directories::UserDirs::new().unwrap();
+    let home = user_dirs.home_dir();
+    for (i, (dir, files)) in paths_by_dir.clone().into_iter().enumerate() {
+        debug!("Processing directory: {:?} with {} files", dir, files.len());
         if !dir.as_os_str().is_empty() {
-            println!("{}:", dir.display().to_string().blue().bold());
-        }
-        for file in files {
+            let display_path = dir.strip_prefix(home).unwrap_or(&dir);
+            let prefix = if i == paths_by_dir.len() - 1 {
+                "└── "
+            } else {
+                "├── "
+            };
             println!(
-                "  {}",
-                file.file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .bright_green()
+                "{}{}{}{}",
+                prefix.blue().bold(),
+                "📁 ".blue().bold(),
+                display_path.display().to_string().blue().bold(),
+                ":".blue().bold()
+            );
+        }
+
+        for (j, file) in files.clone().into_iter().enumerate() {
+            let display_path = file.strip_prefix(home).unwrap_or(&file);
+            let file_type = if file.is_dir() { "📁" } else { "" };
+            let prefix = if j == files.len() - 1 {
+                "    └── "
+            } else {
+                "    ├── "
+            };
+            println!(
+                "{}{} {}",
+                prefix.bright_green(),
+                file_type.bright_green(),
+                display_path.display()
             );
         }
     }
@@ -168,6 +198,7 @@ fn display_files(mut repo: DotFs, dirty: bool) -> Result<()> {
 }
 
 fn group_tabs_by_directory(paths: Vec<PathBuf>) -> collections::BTreeMap<PathBuf, Vec<PathBuf>> {
+    debug!("Grouping {} paths by directory", paths.len());
     let mut paths_by_dir: collections::BTreeMap<PathBuf, Vec<PathBuf>> =
         collections::BTreeMap::new();
     for file in paths {
