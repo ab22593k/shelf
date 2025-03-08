@@ -48,7 +48,7 @@ impl std::fmt::Display for CommitMsgContinuation {
         if let Some(footer) = &self.footer {
             let footer_str = footer
                 .iter()
-                .map(|issue| format!("{}", issue))
+                .map(|issue| issue.to_string())
                 .collect::<Vec<_>>()
                 .join(", ");
             writeln!(f, "\n{}", footer_str)?;

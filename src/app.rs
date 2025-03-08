@@ -37,7 +37,7 @@ pub enum Commands {
     },
     /// Generate a commit message using AI or manage git hooks.
     Commit {
-        /// Add context
+        /// Suitable continuation context for the commit message.
         #[arg(short, long)]
         prefix: String,
         /// Override the configured model.

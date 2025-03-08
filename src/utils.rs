@@ -89,7 +89,7 @@ fn format_diff(diff: &git2::Diff) -> Result<String> {
                 _ => {}
             }
 
-            diff_text.push_str(&text);
+            diff_text.push_str(text);
             true
         } else {
             false

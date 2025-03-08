@@ -49,7 +49,7 @@ shelf dotfs save
 
 Generate a commit message for staged changes:
 ```bash
-shelf commit [--model MODEL] [--fixes ISSUE] [--history N]
+shelf commit --prefix="Some context" [--model MODEL] [--history N]
 ```
 
 Review staged changes:
