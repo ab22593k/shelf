@@ -7,7 +7,6 @@ use rig::{completion::Prompt, providers::gemini};
 use std::{
     collections,
     path::{Path, PathBuf},
-    process::Command,
 };
 use tracing::debug;
 
@@ -38,15 +37,18 @@ pub enum Commands {
     },
     /// Generate a commit message using AI or manage git hooks.
     Commit {
+        /// Add context
+        #[arg(short, long)]
+        prefix: String,
         /// Override the configured model.
-        #[arg(short, long, default_value = "gemini-2.0-flash")]
+        #[arg(short, long, default_value = "gemini-2.0-flash-lite")]
         model: String,
-        /// Add issue reference to the commit footer.
-        #[arg(short, long, default_value = None)]
-        fixes: Option<usize>,
         /// Include the nth commit history.
-        #[arg(long, default_value = "10")]
-        history: usize,
+        #[arg(long, short = 'd', default_value = "10")]
+        history_depth: usize,
+        /// Add issue references to the commit footer.
+        #[arg(short, long, default_value = None)]
+        r#ref: Option<Vec<usize>>,
     },
     /// Review code changes and suggest improvements using AI.
     Review {
@@ -90,11 +92,12 @@ pub async fn run_app(cli: Shelf, repo: DotFs) -> Result<()> {
             handle_dotfs_command(action, repo).await?;
         }
         Commands::Commit {
+            prefix,
             model,
-            history,
-            fixes,
+            history_depth,
+            r#ref,
         } => {
-            handle_commit_action(model.as_str(), fixes, history).await?;
+            handle_commit_action(prefix, model.as_str(), history_depth, r#ref).await?;
         }
         Commands::Review { model } => {
             let msg = handle_review_action(model.as_str()).await?;
@@ -211,17 +214,13 @@ fn group_tabs_by_directory(paths: Vec<PathBuf>) -> collections::BTreeMap<PathBuf
 }
 
 async fn handle_commit_action(
+    prefix: &str,
     model: &str,
-    fixes: &Option<usize>,
     history: &usize,
+    r#ref: &Option<Vec<usize>>,
 ) -> Result<String> {
-    // // Initialize client and get required git info
-    let diff = get_staged_diff().context("Getting staged changes failed")?;
-    let commit_history = get_recent_commits(Path::new("."), history, None).unwrap_or_default(); // Handle first commit case by using empty history if get_recent_commits fails
-    let agent = gemini::Client::from_env();
-
     loop {
-        let raw_response = extract_commit_from_diff(&agent, &diff, &commit_history)
+        let raw_response = extract_commit_from_diff(prefix, model, history, r#ref)
             .await?
             .to_string();
         debug!("{}", raw_response);
@@ -263,127 +262,6 @@ fn user_selection() -> Result<UserAction> {
         }
     }
 }
-
-fn get_git_diff() -> Result<String> {
-    let output = Command::new("git")
-        .arg("diff")
-        .arg("--staged")
-        .output()
-        .context("Failed to execute git diff command")?;
-
-    if !output.status.success() {
-        let error = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("Git diff command failed: {}", error);
-    }
-
-    String::from_utf8(output.stdout).context("Git diff output was not valid UTF-8")
-}
-
-/// Generates a commit message using the AI model
-// async fn generate_commit_message(
-//     _model: &str,
-//     fixes: &Option<usize>,
-//     commit_history: &[String],
-//     diff: &str,
-// ) -> Result<CommitMessage> {
-//     let agent = gemini::Client::from_env();
-//     // Escape special characters in commit history to avoid issues when passing to AI
-//     let sanitized_history: Vec<String> = commit_history
-//         .iter()
-//         .map(|entry| {
-//             entry.replace(
-//                 |c: char| !c.is_ascii_graphic() && !c.is_ascii_whitespace(),
-//                 "",
-//             )
-//         })
-//         .collect();
-
-//     // Escape special characters in diff to avoid issues when passing to AI
-//     let sanitized_diff = diff.replace(
-//         |c: char| !c.is_ascii_graphic() && !c.is_ascii_whitespace(),
-//         "",
-//     );
-
-//     run_with_progress(|| async {
-//         match extract_commit_data(&agent, &sanitized_diff, &sanitized_history, *fixes).await {
-//             Ok(commit) => {
-//                 info!("Successfully extracted commit data");
-//                 Ok(commit)
-//             }
-//             Err(e) => {
-//                 error!(
-//                     error.display = %e,
-//                     error.debug = ?e,
-//                     "Extraction process failed"
-//                 );
-//                 Err(e).context("Commit data extraction failed")
-//             }
-//         }
-//     })
-//     .await
-// }
-
-/// Generates a commit message using the AI model
-// async fn generate_commit_message(
-//     _model: &str,
-//     fixes: &Option<usize>,
-//     commit_history: &[String],
-//     diff: &str,
-// ) -> Result<CommitMessage> {
-//     let agent = gemini::Client::from_env();
-
-//     // Sanitize commit history: keep ASCII graphic and whitespace characters
-//     let sanitized_history: Vec<String> = commit_history
-//         .iter()
-//         .map(|entry| {
-//             entry
-//                 .chars()
-//                 .filter(|&c| c.is_ascii_graphic() || c.is_ascii_whitespace())
-//                 .collect()
-//         })
-//         .collect();
-
-//     // Sanitize diff: keep ASCII graphic, whitespace, newlines, and tabs
-//     let sanitized_diff: String = diff
-//         .chars()
-//         .filter(|&c| c.is_ascii_graphic() || c.is_ascii_whitespace() || c == '\n' || c == '\t')
-//         .collect();
-
-//     // Validate inputs
-//     if sanitized_diff.trim().is_empty() {
-//         error!("Sanitized git diff is empty");
-//         return Err(anyhow::anyhow!(
-//             "Cannot generate commit message from an empty git diff"
-//         ))
-//         .context("Commit data extraction failed");
-//     }
-
-//     if sanitized_history.iter().all(|s| s.trim().is_empty()) {
-//         error!("Sanitized commit history is empty or contains only empty strings");
-//         // Optionally proceed with an empty history or return an error
-//     }
-
-//     // Process with the AI model
-//     run_with_progress(|| async {
-//         match extract_commit_data(&agent, &sanitized_diff, &sanitized_history, *fixes).await {
-//             Ok(commit) => {
-//                 info!("Successfully extracted commit data");
-//                 Ok(commit)
-//             }
-//             Err(e) => {
-//                 error!(
-//                     error.display = %e,
-//                     error.debug = ?e,
-//                     sanitized_diff = %sanitized_diff,
-//                     sanitized_history = ?sanitized_history,
-//                     "Extraction process failed"
-//                 );
-//                 Err(e).context("Commit data extraction failed")
-//             }
-//         }
-//     })
-//     .await
-// }
 
 /// Creates a git commit with the generated message
 fn create_git_commit(msg: &str) -> Result<String> {
@@ -427,80 +305,4 @@ async fn handle_review_action(model: &str) -> Result<String> {
     .await?;
 
     Ok(msg)
-}
-
-/// Get the last Nth commits from the repository
-pub fn get_recent_commits(
-    repo_path: &Path,
-    history: &usize,
-    ignore_patterns: Option<&[&str]>,
-) -> Result<Vec<String>> {
-    let repo = Repository::open(repo_path).context("Opening git repository failed")?;
-    let head_commit = get_head_commit(&repo)?;
-    let revwalk = setup_revision_walker(&repo, &head_commit)?;
-
-    Ok(revwalk
-        .take(*history)
-        .filter_map(|id| process_commit(&repo, id, ignore_patterns))
-        .collect())
-}
-
-fn get_head_commit(repo: &Repository) -> Result<git2::Commit> {
-    repo.head()
-        .context("Getting repository HEAD failed")?
-        .peel_to_commit()
-        .context("Getting HEAD commit failed")
-}
-
-fn setup_revision_walker<'a>(
-    repo: &'a Repository,
-    head_commit: &git2::Commit,
-) -> Result<git2::Revwalk<'a>> {
-    let mut revwalk = repo.revwalk().context("Creating revision walker failed")?;
-    revwalk
-        .push(head_commit.id())
-        .context("Setting starting commit failed")?;
-    revwalk
-        .set_sorting(git2::Sort::TIME)
-        .context("Setting sort order failed")?;
-
-    Ok(revwalk)
-}
-
-fn process_commit(
-    repo: &Repository,
-    id: Result<git2::Oid, git2::Error>,
-    ignore_patterns: Option<&[&str]>,
-) -> Option<String> {
-    id.ok().and_then(|id| {
-        let commit = repo.find_commit(id).ok()?;
-        if should_ignore_commit(&commit, ignore_patterns) {
-            return None;
-        }
-
-        Some(format!(
-            "{} - {}: {}",
-            commit.id(),
-            commit.author().name().unwrap_or("Unknown"),
-            commit.message().unwrap_or("No message")
-        ))
-    })
-}
-
-fn should_ignore_commit(commit: &git2::Commit, ignore_patterns: Option<&[&str]>) -> bool {
-    if let Some(patterns) = ignore_patterns {
-        if let Ok(tree) = commit.tree() {
-            for pattern in patterns {
-                if tree.iter().any(|entry| {
-                    entry
-                        .name()
-                        .map(|name| name.contains(pattern))
-                        .unwrap_or(false)
-                }) {
-                    return true;
-                }
-            }
-        }
-    }
-    false
 }
