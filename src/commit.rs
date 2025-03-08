@@ -1,89 +1,95 @@
 use anyhow::Result;
-use rig::{
-    agent::{Agent, AgentBuilder},
-    completion::{CompletionModel, Prompt, PromptError},
-    message::Message,
-};
-use tracing::debug;
+use rig::providers::gemini;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+use tracing::instrument;
 
-const PREAMBLE: &str = r#"You are an expert software developer writing a Git commit message.
-Based on the following code diff and the project's commit history, complete the following commit
-message prefix. Pay attention to the style and conventions used in previous commits.
-"#;
-
-const PROMPT_PREFIX: &str = r#"Write a concise and meaningful commit message.
-
-Consider these guidelines:
-- Use the imperative mood ('add', 'fix', 'update', not 'adds', 'fixed', 'updating')
-- Start with a clear action verb
-- Include the scope of the change (e.g., module or component) in the subject line if applicable
-- Keep each line of the message under 80 characters for readability
-- Keep the first line under 50 characters
-- Explain what and why in the body if needed
-- Reference related issues in a footer
-
-Your response should be only the commit message text with no additional formatting or markup.
-"#;
-
-pub struct MsgCompletion<M: CompletionModel> {
-    agent: Agent<M>,
-    pub prompt: String,
+#[derive(Debug, Deserialize, JsonSchema, Serialize)]
+/// A record representing a git commit message
+pub struct Commit {
+    /// The type of commit
+    pub r#type: String,
+    /// The commit title/summary
+    pub title: String,
+    /// The commit description/body
+    pub body: Option<String>,
+    /// Optional breaking changes introduced by the commit
+    pub breaking_changes: Option<String>,
+    /// Optional emoji to prepend to the commit title
+    pub emoji: Option<String>,
 }
 
-impl<M: CompletionModel> MsgCompletion<M> {
-    pub fn new(model: M) -> Self {
-        Self {
-            agent: AgentBuilder::new(model.clone()).preamble(PREAMBLE).build(),
-            prompt: String::from(PROMPT_PREFIX),
+impl std::fmt::Display for Commit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "{}: {}", self.r#type, self.title)?;
+        // Write the emoji and title side by side
+        // if let Some(emoji) = &self.emoji {
+        //     write!(f, "{} ", emoji)?;
+        // }
+
+        // Add the body with proper spacing if it exists
+        if let Some(body) = &self.body {
+            writeln!(f, "\n{}", body)?;
         }
-    }
 
-    pub fn with_diff(mut self, diff: &str) -> Self {
-        self.prompt.push_str(&format_diff_section(diff));
-        self
-    }
-
-    pub fn with_history(mut self, commit_history: Vec<String>) -> Self {
-        self.prompt
-            .push_str(&format_history_section(&commit_history));
-        self
-    }
-
-    pub fn with_issue(mut self, issue: &Option<usize>) -> Self {
-        if let Some(ref_num) = issue {
-            self.prompt.push_str(&format_issue_reference(*ref_num));
+        // Add breaking changes with proper spacing if it exists
+        if let Some(breaking_changes) = &self.breaking_changes {
+            writeln!(f, "\nBREAKING CHANGES:\n{}", breaking_changes)?;
         }
-        self
+
+        Ok(())
     }
 }
 
-fn format_diff_section(diff: &str) -> String {
-    format!(
-        "The code changes being committed are as follows:\n<diff>\n{}\n</diff>\n\n",
-        diff
-    )
-}
-
-fn format_history_section(history: &[String]) -> String {
-    format!(
-        "Relevant previous commit messages:\n<history>\n{}\n</history>\n\n",
-        history.join("\n")
-    )
-}
-
-fn format_issue_reference(n: usize) -> String {
-    format!(
-        "The issue reference should be always added as a footer with: Fixes #{}\n\n",
-        n
-    )
-}
-
-impl<M: CompletionModel> Prompt for MsgCompletion<M> {
-    async fn prompt(&self, prompt: impl Into<Message> + Send) -> Result<String, PromptError> {
-        debug!(
-            "Generating commit message from prompt:\n{}\n\n",
-            self.prompt
-        );
-        self.agent.prompt(prompt).await
+/// Extracts commit data from the git diff using Gemini AI
+///
+/// # Arguments
+/// * `client` - The Gemini client instance
+/// * `git_diff` - The git diff content to analyze
+/// * `commit_history` - Previous commit messages for context
+///
+/// # Returns
+/// * `Result<Commit>` - The extracted commit data or an error
+#[instrument(skip(client), fields(diff_len = git_diff.len(), history_len = commit_history.len()))]
+pub async fn extract_commit_from_diff(
+    client: &gemini::Client,
+    git_diff: &str,
+    commit_history: &[String],
+) -> Result<Commit> {
+    // Exit early if diff is empty
+    if git_diff.trim().is_empty() {
+        return Err(anyhow::anyhow!(
+            "Cannot generate commit message from empty diff"
+        ));
     }
+
+    // Configure and build the commit extractor with proper context
+    let commit_extractor = client
+        .extractor::<Commit>("gemini-2.0-flash-lite")
+        .preamble(
+            r#"
+            Generate a structured commit message from the git diff. Use concise,
+            descriptive titles in present tense. Ensure clarity and relevance.
+
+            Consider these guidelines:
+            - Start with a clear action verb
+            - Keep each line of the body under 80 characters for readability
+            - Keep the first line under 50 characters
+            "#,
+        )
+        .context(&commit_history.join("\n---\n")) // Improved separator for better readability
+        .build();
+
+    // Extract commit information using the AI model
+    let commit = commit_extractor
+        .extract(&git_diff)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to extract commit data: {}", e))?;
+
+    // Log the extracted commit for debugging purposes
+    if let Ok(json) = serde_json::to_string_pretty(&commit) {
+        println!("Extracted Commit Data:\n{}", json);
+    }
+
+    Ok(commit)
 }

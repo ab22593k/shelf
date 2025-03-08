@@ -44,7 +44,15 @@ pub fn get_staged_diff() -> Result<String> {
 
 fn generate_diff(repo: &Repository) -> Result<git2::Diff<'_>> {
     let mut diff_opts = DiffOptions::new();
-    diff_opts.context_lines(3).patience(true).minimal(true);
+    diff_opts
+        .context_lines(4)
+        .minimal(true)
+        .patience(true)
+        .include_typechange(true)
+        .indent_heuristic(true)
+        .skip_binary_check(true)
+        .ignore_whitespace_change(true)
+        .ignore_whitespace_eol(true);
 
     // Get head tree and index tree
     let head_tree = match repo.head() {
@@ -77,9 +85,11 @@ fn format_diff(diff: &git2::Diff) -> Result<String> {
             match line.origin() {
                 '+' => diff_text.push('+'),
                 '-' => diff_text.push('-'),
+                '=' => diff_text.push('='),
                 _ => {}
             }
-            diff_text.push_str(text);
+
+            diff_text.push_str(&text);
             true
         } else {
             false

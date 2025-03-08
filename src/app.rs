@@ -7,17 +7,18 @@ use rig::{completion::Prompt, providers::gemini};
 use std::{
     collections,
     path::{Path, PathBuf},
+    process::Command,
 };
 use tracing::debug;
 
 use crate::{
-    commit::MsgCompletion,
-    review::Reviewer,
-    utils::{get_staged_diff, run_with_progress},
-};
-use crate::{
+    commit::extract_commit_from_diff,
     dotfs::{DotFs, ListFilter},
     shell::completions_script,
+};
+use crate::{
+    review::Reviewer,
+    utils::{get_staged_diff, run_with_progress},
 };
 
 #[derive(Parser)]
@@ -38,7 +39,7 @@ pub enum Commands {
     /// Generate a commit message using AI or manage git hooks.
     Commit {
         /// Override the configured model.
-        #[arg(short, long, default_value = "gemini-2.0-flash-lite")]
+        #[arg(short, long, default_value = "gemini-2.0-flash")]
         model: String,
         /// Add issue reference to the commit footer.
         #[arg(short, long, default_value = None)]
@@ -214,20 +215,22 @@ async fn handle_commit_action(
     fixes: &Option<usize>,
     history: &usize,
 ) -> Result<String> {
-    // Initialize client and get required git info
+    // // Initialize client and get required git info
     let diff = get_staged_diff().context("Getting staged changes failed")?;
     let commit_history = get_recent_commits(Path::new("."), history, None).unwrap_or_default(); // Handle first commit case by using empty history if get_recent_commits fails
+    let agent = gemini::Client::from_env();
 
     loop {
-        // Generate commit message using AI
-        let msg = generate_commit_message(model, fixes, &commit_history, &diff).await?;
-        println!("{}", msg);
+        let raw_response = extract_commit_from_diff(&agent, &diff, &commit_history)
+            .await?
+            .to_string();
+        debug!("{}", raw_response);
 
         // Get user action selection
         let selection = user_selection()?;
         match selection {
             UserAction::RegenerateMessage => continue,
-            UserAction::CommitChanges => return create_git_commit(&msg),
+            UserAction::CommitChanges => return create_git_commit(&raw_response),
             UserAction::Quit => return Ok("Quitting".to_string()),
             UserAction::Cancelled => return Ok("Cancelled".to_string()),
         }
@@ -261,27 +264,126 @@ fn user_selection() -> Result<UserAction> {
     }
 }
 
-/// Generates a commit message using the AI model
-async fn generate_commit_message(
-    model: &str,
-    fixes: &Option<usize>,
-    commit_history: &[String],
-    diff: &str,
-) -> Result<String> {
-    let agent = gemini::Client::from_env();
-    run_with_progress(|| async {
-        let commiter = MsgCompletion::new(agent.completion_model(model))
-            .with_issue(fixes)
-            .with_history(commit_history.to_vec())
-            .with_diff(diff);
+fn get_git_diff() -> Result<String> {
+    let output = Command::new("git")
+        .arg("diff")
+        .arg("--staged")
+        .output()
+        .context("Failed to execute git diff command")?;
 
-        commiter
-            .prompt(commiter.prompt.as_str())
-            .await
-            .map_err(|e| anyhow!(e))
-    })
-    .await
+    if !output.status.success() {
+        let error = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("Git diff command failed: {}", error);
+    }
+
+    String::from_utf8(output.stdout).context("Git diff output was not valid UTF-8")
 }
+
+/// Generates a commit message using the AI model
+// async fn generate_commit_message(
+//     _model: &str,
+//     fixes: &Option<usize>,
+//     commit_history: &[String],
+//     diff: &str,
+// ) -> Result<CommitMessage> {
+//     let agent = gemini::Client::from_env();
+//     // Escape special characters in commit history to avoid issues when passing to AI
+//     let sanitized_history: Vec<String> = commit_history
+//         .iter()
+//         .map(|entry| {
+//             entry.replace(
+//                 |c: char| !c.is_ascii_graphic() && !c.is_ascii_whitespace(),
+//                 "",
+//             )
+//         })
+//         .collect();
+
+//     // Escape special characters in diff to avoid issues when passing to AI
+//     let sanitized_diff = diff.replace(
+//         |c: char| !c.is_ascii_graphic() && !c.is_ascii_whitespace(),
+//         "",
+//     );
+
+//     run_with_progress(|| async {
+//         match extract_commit_data(&agent, &sanitized_diff, &sanitized_history, *fixes).await {
+//             Ok(commit) => {
+//                 info!("Successfully extracted commit data");
+//                 Ok(commit)
+//             }
+//             Err(e) => {
+//                 error!(
+//                     error.display = %e,
+//                     error.debug = ?e,
+//                     "Extraction process failed"
+//                 );
+//                 Err(e).context("Commit data extraction failed")
+//             }
+//         }
+//     })
+//     .await
+// }
+
+/// Generates a commit message using the AI model
+// async fn generate_commit_message(
+//     _model: &str,
+//     fixes: &Option<usize>,
+//     commit_history: &[String],
+//     diff: &str,
+// ) -> Result<CommitMessage> {
+//     let agent = gemini::Client::from_env();
+
+//     // Sanitize commit history: keep ASCII graphic and whitespace characters
+//     let sanitized_history: Vec<String> = commit_history
+//         .iter()
+//         .map(|entry| {
+//             entry
+//                 .chars()
+//                 .filter(|&c| c.is_ascii_graphic() || c.is_ascii_whitespace())
+//                 .collect()
+//         })
+//         .collect();
+
+//     // Sanitize diff: keep ASCII graphic, whitespace, newlines, and tabs
+//     let sanitized_diff: String = diff
+//         .chars()
+//         .filter(|&c| c.is_ascii_graphic() || c.is_ascii_whitespace() || c == '\n' || c == '\t')
+//         .collect();
+
+//     // Validate inputs
+//     if sanitized_diff.trim().is_empty() {
+//         error!("Sanitized git diff is empty");
+//         return Err(anyhow::anyhow!(
+//             "Cannot generate commit message from an empty git diff"
+//         ))
+//         .context("Commit data extraction failed");
+//     }
+
+//     if sanitized_history.iter().all(|s| s.trim().is_empty()) {
+//         error!("Sanitized commit history is empty or contains only empty strings");
+//         // Optionally proceed with an empty history or return an error
+//     }
+
+//     // Process with the AI model
+//     run_with_progress(|| async {
+//         match extract_commit_data(&agent, &sanitized_diff, &sanitized_history, *fixes).await {
+//             Ok(commit) => {
+//                 info!("Successfully extracted commit data");
+//                 Ok(commit)
+//             }
+//             Err(e) => {
+//                 error!(
+//                     error.display = %e,
+//                     error.debug = ?e,
+//                     sanitized_diff = %sanitized_diff,
+//                     sanitized_history = ?sanitized_history,
+//                     "Extraction process failed"
+//                 );
+//                 Err(e).context("Commit data extraction failed")
+//             }
+//         }
+//     })
+//     .await
+// }
 
 /// Creates a git commit with the generated message
 fn create_git_commit(msg: &str) -> Result<String> {

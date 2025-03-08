@@ -33,6 +33,10 @@ async fn initialize_tracing() {
     if let Err(e) = tracing_subscriber::fmt()
         .with_max_level(level)
         .with_target(false)
+        .with_file(true)
+        .with_line_number(true)
+        .with_thread_ids(true)
+        .pretty()
         .try_init()
     {
         eprintln!("Failed to initialize tracing: {}", e.to_string().red());
