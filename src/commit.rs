@@ -21,13 +21,18 @@ pub struct CommitMsgContinuation {
     pub breaking_changes: Option<String>,
     /// Optional emoji to prepend to the commit title
     pub emoji: Option<String>,
-    /// Optional footer to add additional context
-    pub footer: Option<String>,
+    /// Optional footer to add issue tracker context
+    pub footer: Option<Vec<String>>,
 }
 
 impl std::fmt::Display for CommitMsgContinuation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "{}: {}", self.r#type, self.title)?;
+        let prefix = if let Some(emoji) = &self.emoji {
+            format!("{} ", emoji)
+        } else {
+            String::new()
+        };
+        writeln!(f, "{}{}: {}", prefix, self.r#type, self.title)?;
 
         // Add the body with proper spacing if it exists
         if let Some(body) = &self.body {
@@ -41,7 +46,12 @@ impl std::fmt::Display for CommitMsgContinuation {
 
         // Add footer with proper spacing if it exists
         if let Some(footer) = &self.footer {
-            writeln!(f, "\n{}", footer)?;
+            let footer_str = footer
+                .iter()
+                .map(|issue| format!("{}", issue))
+                .collect::<Vec<_>>()
+                .join(", ");
+            writeln!(f, "\n{}", footer_str)?;
         }
 
         Ok(())
@@ -54,15 +64,11 @@ impl std::fmt::Display for CommitMsgContinuation {
 /// * `client` - The Gemini client instance
 /// * `git_diff` - The git diff content to analyze
 /// * `commit_history` - Previous commit messages for context
-///
-/// # Returns
-/// * `Result<Commit>` - The extracted commit data or an error
-/// * `r#ref` - Optional issue references to include in the commit message context
-pub async fn extract_commit_from_diff(
+pub async fn commit_completion(
     prefix: &str,
     model: &str,
     history_depth: &usize,
-    r#ref: &Option<Vec<usize>>,
+    ignored: &Option<Vec<String>>,
 ) -> Result<CommitMsgContinuation> {
     // Exit early if diff is empty
     let diff = get_staged_diff().context("Getting staged changes failed")?;
@@ -72,63 +78,48 @@ pub async fn extract_commit_from_diff(
         ));
     }
 
-    //  let pp = prefix.insert_str(
-    //      0,
-    //      " given the prefix of a commit message and
-    // the commit context, generate a suitable continuation for the
-    // commit message. ",
-    //  );
+    let ignored_str_refs: Option<Vec<&str>> = ignored
+        .as_ref()
+        .map(|v| v.iter().map(|s| s.as_str()).collect());
+    let history = get_recent_commits(history_depth, ignored_str_refs.as_deref())?;
 
-    let history = get_recent_commits(history_depth, None)?;
-
-    let history_context = history
+    let history_aware = history
         .iter()
         .map(|(oid, message)| format!("Commit Hash: {}\nCommit Message: {}", oid, message))
         .collect::<Vec<_>>()
         .join("\n---\n");
 
-    let mut context_parts = vec![history_context];
-
-    if let Some(refs) = r#ref {
-        if !refs.is_empty() {
-            let issue_context = format!(
-                "Issue References: {}\nThe following issue references are related to the changes in the diff and should be considered when generating the commit message. ",
-                refs.iter()
-                    .map(|r| format!("#{}", r))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            );
-            context_parts.push(issue_context);
-        }
-    }
-
-    let full_context = context_parts.join("\n---\n");
-
     let client = gemini::Client::from_env();
 
     // Configure and build the commit extractor with proper context
-    let commit_extractor = client
+    let commit_completion = client
         .extractor::<CommitMsgContinuation>(model)
         .preamble(
             r#"Generate a structured commit message from the git diff. Use concise,
-            descriptive titles in present tense. Ensure clarity and relevance.
+                descriptive titles in present tense. Ensure clarity and relevance.
 
-            Consider these guidelines:
-            - Start with a clear action verb
-            - Keep each line of the body under 80 characters for readability
-            - Keep the first line under 50 characters
-            - If issue references are provided, consider them to understand the context and purpose of the changes.
-            "#,
+                Consider these guidelines:
+                - Start with a clear action verb
+                - Keep each line of the body under 80 characters for readability
+                - Keep the first line under 50 characters
+
+
+                You will be provided with:
+                1. A commit message prefix that needs to be continued
+                2. The git diff of the changes
+                3. Recent commit history for context
+                "#,
         )
-        .context(format!(" given the prefix of a commit message and
-       the commit context, generate a suitable continuation for the
-       commit message: {}", prefix).as_str())
-        .context(&full_context)
         .build();
 
-    // Extract commit information using the AI model
-    let commit = commit_extractor
-        .extract(&diff)
+    // Complete commit information using the AI model
+    let input = format!(
+        "Commit message prefix:\n{}\n\nRecent commit history:\n{}\n\n:\n{}",
+        prefix, history_aware, diff
+    );
+
+    let commit = commit_completion
+        .extract(input.as_str())
         .await
         .map_err(|e| anyhow::anyhow!("Failed to extract commit data: {}", e))?;
 
@@ -185,14 +176,25 @@ fn process_commit<'repo>(
     id: Result<git2::Oid, git2::Error>,
     ignore_patterns: Option<&[&str]>,
 ) -> Option<(git2::Oid, git2::Commit<'repo>)> {
-    id.ok().and_then(|id| {
-        let commit = repo.find_commit(id).ok()?;
-        if should_ignore_commit(&commit, ignore_patterns) {
-            return None;
+    match id {
+        Ok(oid) => match repo.find_commit(oid) {
+            Ok(commit) => {
+                if should_ignore_commit(&commit, ignore_patterns) {
+                    return None;
+                }
+                Some((oid, commit))
+            }
+            Err(err) => {
+                eprintln!("Failed to find commit {}: {}", oid, err);
+                None
+            }
+        },
+        Err(err) => {
+            // Log the error for better debugging
+            eprintln!("Invalid commit ID: {}", err);
+            None
         }
-
-        Some((id, commit))
-    })
+    }
 }
 
 fn should_ignore_commit(commit: &git2::Commit, ignore_patterns: Option<&[&str]>) -> bool {

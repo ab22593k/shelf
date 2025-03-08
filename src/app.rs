@@ -11,7 +11,7 @@ use std::{
 use tracing::debug;
 
 use crate::{
-    commit::extract_commit_from_diff,
+    commit::commit_completion,
     dotfs::{DotFs, ListFilter},
     shell::completions_script,
 };
@@ -46,9 +46,9 @@ pub enum Commands {
         /// Include the nth commit history.
         #[arg(long, short = 'd', default_value = "10")]
         history_depth: usize,
-        /// Add issue references to the commit footer.
-        #[arg(short, long, default_value = None)]
-        r#ref: Option<Vec<usize>>,
+        /// Ignore specific files or patterns when generating a commit (comma-separated).
+        #[arg(short, long, default_value = None, value_delimiter = ',', num_args = 1..)]
+        ignored: Option<Vec<String>>,
     },
     /// Review code changes and suggest improvements using AI.
     Review {
@@ -95,9 +95,9 @@ pub async fn run_app(cli: Shelf, repo: DotFs) -> Result<()> {
             prefix,
             model,
             history_depth,
-            r#ref,
+            ignored,
         } => {
-            handle_commit_action(prefix, model.as_str(), history_depth, r#ref).await?;
+            handle_commit_action(prefix, model.as_str(), history_depth, ignored).await?;
         }
         Commands::Review { model } => {
             let msg = handle_review_action(model.as_str()).await?;
@@ -217,10 +217,10 @@ async fn handle_commit_action(
     prefix: &str,
     model: &str,
     history: &usize,
-    r#ref: &Option<Vec<usize>>,
+    ignored: &Option<Vec<String>>,
 ) -> Result<String> {
     loop {
-        let raw_response = extract_commit_from_diff(prefix, model, history, r#ref)
+        let raw_response = commit_completion(prefix, model, history, ignored)
             .await?
             .to_string();
         debug!("{}", raw_response);
