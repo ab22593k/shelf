@@ -174,16 +174,13 @@ mod tests {
             r#"{{"html_url": "https://github.com/testuser/{}"}}"#,
             repo_name
         );
-        let github_token = "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";
+        let github_token = "TOKEN";
         let github_client = GitHubClient::new(github_token.to_string());
 
         let _m = server
             .mock("POST", "/user/repos")
             .match_header("accept", "application/vnd.github+json")
-            .match_header(
-                "authorization",
-                "Bearer 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",
-            )
+            .match_header("authorization", "Bearer TOKEN")
             .match_header("x-github-api-version", GITHUB_API_VERSION)
             .match_header("user-agent", "shelf-github-api-client")
             .match_body(Matcher::JsonString(

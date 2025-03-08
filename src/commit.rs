@@ -103,7 +103,10 @@ pub async fn commit_completion(
                 - Keep each line of the body under 80 characters for readability
                 - Keep the first line under 50 characters
 
+<<<<<<< HEAD
 
+=======
+>>>>>>> 2b0ff7b (♻️ refactor: Refactor commit generation)
                 You will be provided with:
                 1. A commit message prefix that needs to be continued
                 2. The git diff of the changes
