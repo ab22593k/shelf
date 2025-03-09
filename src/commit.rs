@@ -8,6 +8,19 @@ use serde::{Deserialize, Serialize};
 
 use crate::utils::get_staged_diff;
 
+const PREAMBLE: &str = r#"write a short clear commit message that summarizes the changes.
+If you - can accurately express the change in just the subject line, don't include anything in the message body.
+
+Follow good Git style:
+- Use imperative mood in the subject line.
+- Limit the subject line to 50 characters.
+- Wrap the body at 72 characters.
+- Keep the body short and concise (omit it entirely if not useful)
+- Use the footer to add issue tracker context.
+- Only use the body when it is providing *useful* information.
+- Don't repeat information from the subject line in the message body.
+"#;
+
 #[derive(Debug, Deserialize, JsonSchema, Serialize)]
 /// A record representing a git commit message
 pub struct CommitMsgContinuation {
@@ -94,25 +107,7 @@ pub async fn commit_completion(
     // Configure and build the commit extractor with proper context
     let commit_completion = client
         .extractor::<CommitMsgContinuation>(model)
-        .preamble(
-            r#"Generate a structured commit message from the git diff. Use concise,
-                descriptive titles in present tense. Ensure clarity and relevance.
-
-                Consider these guidelines:
-                - Start with a clear action verb
-                - Keep each line of the body under 80 characters for readability
-                - Keep the first line under 50 characters
-
-<<<<<<< HEAD
-
-=======
->>>>>>> 2b0ff7b (♻️ refactor: Refactor commit generation)
-                You will be provided with:
-                1. A commit message prefix that needs to be continued
-                2. The git diff of the changes
-                3. Recent commit history for context
-                "#,
-        )
+        .preamble(PREAMBLE)
         .build();
 
     // Complete commit information using the AI model
