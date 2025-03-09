@@ -8,8 +8,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::utils::get_staged_diff;
 
-const PREAMBLE: &str = r#"*commit message completion*. Given a *prefix* of a commit message (which may be empty) and a Git diff, you will generate a *suitable continuation* to create a complete and well-structured commit message.
-
+const PREAMBLE: &str = r#"Given a *prefix* of a commit message (which may be empty) and a Git diff,
+you will generate a *suitable continuation* to create a complete and well-structured commit message.
 Your goal is to produce commit messages that are:
 
 * **Informative:** Clearly explain the *purpose* and *nature* of the changes.
@@ -27,7 +27,7 @@ Your goal is to produce commit messages that are:
 
 **Output Format:**
 
-1. Maximum line length of 80 characters.
+1. Ensure that no line exceeds 80 characters.
 2. You MUST output a structured commit message with the following format.
 "#;
 
