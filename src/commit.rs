@@ -8,17 +8,27 @@ use serde::{Deserialize, Serialize};
 
 use crate::utils::get_staged_diff;
 
-const PREAMBLE: &str = r#"write a short clear commit message that summarizes the changes.
-If you - can accurately express the change in just the subject line, don't include anything in the message body.
+const PREAMBLE: &str = r#"*commit message completion*. Given a *prefix* of a commit message (which may be empty) and a Git diff, you will generate a *suitable continuation* to create a complete and well-structured commit message.
 
-Follow good Git style:
-- Use imperative mood in the subject line.
-- Limit the subject line to 50 characters.
-- Wrap the body at 72 characters.
-- Keep the body short and concise (omit it entirely if not useful)
-- Use the footer to add issue tracker context.
-- Only use the body when it is providing *useful* information.
-- Don't repeat information from the subject line in the message body.
+Your goal is to produce commit messages that are:
+
+* **Informative:** Clearly explain the *purpose* and *nature* of the changes.
+* **Concise:** Easy to read and understand quickly. Keep titles brief and to the point.
+* **Well-Structured:** Follow conventional commit message formats (type, title, body, etc.).
+* **Contextual:** Consider project conventions, using provided commit history as reference.
+* **Continuations:** Seamlessly extend the given prefix to form a coherent message.
+
+**Input Data:**
+
+1. **Commit Message Prefix (Optional):** The beginning of a commit message the user may have started. Could be empty.
+2. **Git Diff:** Output of `git diff --staged`. *Primary information source* about the changes.
+3. **Commit History (Optional):** Recent commit messages from the project for context.
+4. **Issue References (Optional):** Issue numbers (e.g., [123, 456]) to integrate into the commit message.
+
+**Output Format:**
+
+1. Maximum line length of 80 characters.
+2. You MUST output a structured commit message with the following format.
 "#;
 
 #[derive(Debug, Deserialize, JsonSchema, Serialize)]
