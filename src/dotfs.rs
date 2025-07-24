@@ -67,7 +67,7 @@ impl Default for DotFs {
                 filtered_entries: Vec::new(),
                 iter_index: 0,
             },
-            Err(e) => panic!("Failed to initialize DotFs repository: {}", e),
+            Err(e) => panic!("Failed to initialize DotFs repository: {e}"),
         }
     }
 }
@@ -203,10 +203,10 @@ impl DotFs {
         let remote_name = remote.as_ref();
         let branch_name = branch.as_ref();
 
-        debug!("Pushing to remote {} branch {}", remote_name, branch_name);
+        debug!("Pushing to remote {remote_name} branch {branch_name}");
 
         let mut remote = self.bare.find_remote(remote_name)?;
-        let refspec = format!("refs/heads/{}", branch_name);
+        let refspec = format!("refs/heads/{branch_name}");
 
         let mut callbacks = git2::RemoteCallbacks::new();
         callbacks.credentials(|_url, username_from_url, allowed_types| {

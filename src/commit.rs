@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use anyhow::{Context, Result, anyhow};
-use git2::Repository;
+use git2::{Commit, Oid, Repository};
 use rig::{
     agent::AgentBuilder,
     client::{CompletionClient, ProviderClient},
@@ -47,23 +47,22 @@ pub async fn commit_completion(
     history_depth: &usize,
     ignored: &Option<Vec<String>>,
 ) -> Result<String> {
-    // Exit early if diff is empty
     let diff = get_staged_diff().context("Getting staged changes failed")?;
     if diff.trim().is_empty() {
         return Err(anyhow!("Cannot generate commit message from empty diff"));
     }
 
-    let ignored_str_refs: Option<Vec<&str>> = ignored
+    let ignored_patterns: Option<Vec<&str>> = ignored
         .as_ref()
         .map(|v| v.iter().map(|s| s.as_str()).collect());
-    let history = get_recent_commits(history_depth, ignored_str_refs.as_deref())?;
+    let history = get_recent_commits(history_depth, ignored_patterns.as_deref())?;
 
     let history_context = history
         .iter()
         .map(|(oid, message)| {
             format!(
                 "• {}: {}",
-                oid.to_string().chars().take(7).collect::<String>(),
+                &oid.to_string()[..7],
                 message.lines().next().unwrap_or("")
             )
         })
@@ -74,8 +73,7 @@ pub async fn commit_completion(
     let completion_model = client.completion_model(model);
 
     let input_prompt = format!(
-        "CODE_CHANGES:\n```diff\n{}\n```\n\nCOMMIT_HISTORY:\n{}\n\nPARTIAL_COMMIT_MESSAGE: {}",
-        diff, history_context, prefix
+        "CODE_CHANGES:\n```diff\n{diff}\n```\n\nCOMMIT_HISTORY:\n{history_context}\n\nPARTIAL_COMMIT_MESSAGE: {prefix}",
     );
 
     let agent = AgentBuilder::new(completion_model)
@@ -89,35 +87,17 @@ pub async fn commit_completion(
     Ok(response)
 }
 
-/// Get the last Nth commits from the repository
+/// Retrieves the last N commits from the repository, optionally ignoring commits that match patterns.
 pub fn get_recent_commits(
-    history: &usize,
+    history_depth: &usize,
     ignore_patterns: Option<&[&str]>,
-) -> Result<Vec<(git2::Oid, String)>> {
+) -> Result<Vec<(Oid, String)>> {
     let repo = Repository::open(Path::new(".")).context("Opening git repository failed")?;
-    let head_commit = get_head_commit(&repo)?;
-    let revwalk = setup_revision_walker(&repo, &head_commit)?;
-
-    Ok(revwalk
-        .take(*history)
-        .filter_map(|id| {
-            process_commit(&repo, id, ignore_patterns)
-                .map(|(oid, commit)| (oid, commit.message().unwrap_or_default().to_string()))
-        })
-        .collect())
-}
-
-fn get_head_commit(repo: &Repository) -> Result<git2::Commit<'_>> {
-    repo.head()
+    let head_commit = repo
+        .head()
         .context("Getting repository HEAD failed")?
         .peel_to_commit()
-        .context("Getting HEAD commit failed")
-}
-
-fn setup_revision_walker<'a>(
-    repo: &'a Repository,
-    head_commit: &git2::Commit,
-) -> Result<git2::Revwalk<'a>> {
+        .context("Getting HEAD commit failed")?;
     let mut revwalk = repo.revwalk().context("Creating revision walker failed")?;
     revwalk
         .push(head_commit.id())
@@ -126,36 +106,29 @@ fn setup_revision_walker<'a>(
         .set_sorting(git2::Sort::TIME)
         .context("Setting sort order failed")?;
 
-    Ok(revwalk)
-}
-
-fn process_commit<'repo>(
-    repo: &'repo Repository,
-    id: Result<git2::Oid, git2::Error>,
-    ignore_patterns: Option<&[&str]>,
-) -> Option<(git2::Oid, git2::Commit<'repo>)> {
-    match id {
-        Ok(oid) => match repo.find_commit(oid) {
-            Ok(commit) => {
-                if should_ignore_commit(&commit, ignore_patterns) {
-                    return None;
+    let mut commits = Vec::new();
+    for id in revwalk.take(*history_depth) {
+        match id {
+            Ok(oid) => match repo.find_commit(oid) {
+                Ok(commit) => {
+                    if !should_ignore_commit(&commit, ignore_patterns) {
+                        commits.push((oid, commit.message().unwrap_or_default().to_string()));
+                    }
                 }
-                Some((oid, commit))
-            }
+                Err(err) => {
+                    eprintln!("Failed to find commit {oid}: {err}");
+                }
+            },
             Err(err) => {
-                eprintln!("Failed to find commit {}: {}", oid, err);
-                None
+                eprintln!("Invalid commit ID: {err}");
             }
-        },
-        Err(err) => {
-            // Log the error for better debugging
-            eprintln!("Invalid commit ID: {}", err);
-            None
         }
     }
+    Ok(commits)
 }
 
-fn should_ignore_commit(commit: &git2::Commit, ignore_patterns: Option<&[&str]>) -> bool {
+/// Determines if a commit should be ignored based on file patterns.
+fn should_ignore_commit(commit: &Commit, ignore_patterns: Option<&[&str]>) -> bool {
     if let Some(patterns) = ignore_patterns {
         if let Ok(tree) = commit.tree() {
             for pattern in patterns {

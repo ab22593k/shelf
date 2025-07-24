@@ -107,14 +107,14 @@ pub async fn run_app(cli: Shelf, repo: DotFs) -> Result<()> {
             handle_commit_action(prefix, model.as_str(), history_depth, ignored).await?;
         }
         Commands::Review { model } => {
-            let msg = handle_review_action(model.as_str()).await?;
-            println!("{}", msg);
+            let reviews = handle_review_action(model.as_str()).await?;
+            println!("{reviews}");
         }
         Commands::Completion { shell } => {
             let mut cmd = Shelf::command();
             let script =
                 completions_script(*shell, &mut cmd).context("Printing completions failed")?;
-            println!("{}", script);
+            println!("{script}");
         }
     }
     Ok(())
@@ -125,7 +125,7 @@ async fn handle_dotfs_command(action: &FileAction, mut repo: DotFs) -> Result<()
         FileAction::Track { paths } => tracking_handler(paths, &mut repo)?,
         FileAction::Untrack { paths } => untracking_handler(paths, &mut repo)?,
         FileAction::List { dirty } => display_files(repo, *dirty)?,
-        FileAction::Save {} => saving_handler(&mut repo).await?,
+        FileAction::Save => saving_handler(&mut repo).await?,
     }
     Ok(())
 }
@@ -219,11 +219,6 @@ fn group_tabs_by_directory(paths: Vec<PathBuf>) -> collections::BTreeMap<PathBuf
 
     paths_by_dir
 }
-
-// Innovative diagnostics fix: Instead of returning String from commit_completion,
-// we accept any type that can be converted to a commit message, and handle both String and Gemini response.
-// This approach is more robust and future-proof.
-
 async fn handle_commit_action(
     prefix: &str,
     model: &str,
@@ -231,11 +226,10 @@ async fn handle_commit_action(
     ignored: &Option<Vec<String>>,
 ) -> Result<String> {
     loop {
-        // Accept any type that implements ToString, but also check for Gemini response structure
+        // Generate commit message using AI model
         let response = commit_completion(prefix, model, history, ignored).await?;
-        println!("{}", response);
 
-        // Try to parse as Gemini response JSON, fallback to plain string
+        // If the response is a Gemini JSON structure, extract the commit message; otherwise, use the plain string
         let commit_msg = if let Ok(parsed) =
             serde_json::from_str::<gemini_api_types::GenerateContentResponse>(&response)
         {
@@ -243,6 +237,8 @@ async fn handle_commit_action(
         } else {
             response.clone()
         };
+
+        println!("{commit_msg}",);
 
         // Get user action selection
         let selection = user_selection()?;
@@ -255,14 +251,10 @@ async fn handle_commit_action(
     }
 }
 
-// Innovative diagnostics fix: extract_commit_message returns String, not &Part
 fn extract_commit_message(response: &gemini_api_types::GenerateContentResponse) -> String {
-    // Try to extract the commit message from the Gemini response structure.
-    // The Gemini response typically contains candidates, each with content parts.
-    // We'll take the first candidate and its first content part as the commit message.
     response
         .candidates
-        .get(0)
+        .first()
         .and_then(|candidate| candidate.content.parts.iter().next())
         .and_then(|part| match part {
             Part::Text(s) => Some(s.clone()),

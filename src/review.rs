@@ -49,7 +49,7 @@ impl<M: CompletionModel> Reviewer<M> {
 
     pub fn with_diff(mut self, diff: &str) -> Self {
         self.prompt
-            .push_str(&format!("<diff>\n{}\n</diff>\n\n", diff));
+            .push_str(&format!("<diff>\n{diff}\n</diff>\n\n"));
         self
     }
 }
