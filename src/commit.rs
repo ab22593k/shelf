@@ -1,104 +1,56 @@
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use git2::Repository;
-use rig::providers::gemini;
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use rig::{
+    agent::AgentBuilder,
+    client::{CompletionClient, ProviderClient},
+    completion::Prompt,
+    providers::gemini,
+};
 
 use crate::utils::get_staged_diff;
 
-const PREAMBLE: &str = r#"Given a *prefix* of a commit message (which may be empty) and a Git diff,
-you will generate a *suitable continuation* to create a complete and well-structured commit message.
-Your goal is to produce commit messages that are:
+const PREAMBLE: &str = r#"You are an expert software developer assistant specialized in crafting clear, concise, informative, and contextually relevant Git commit messages. Your primary task is to **complete a given partial commit message**. You will be provided with a summary of the current code changes and relevant past commit history to help you understand the context and maintain a consistent style and 'personal' nature.
 
-* **Informative:** Clearly explain the *purpose* and *nature* of the changes.
-* **Concise:** Easy to read and understand quickly. Keep titles brief and to the point.
-* **Well-Structured:** Follow conventional commit message formats (type, title, body, etc.).
-* **Contextual:** Consider project conventions, using provided commit history as reference.
-* **Continuations:** Seamlessly extend the given prefix to form a coherent message.
+The goal is to produce high-quality, complete commit messages that effectively track changes and aid collaboration. Ensure the completed message clearly summarizes the change, its purpose, and integrates seamlessly with the partial message provided. **Only return the completed commit message, do not add any additional conversational text or explanations**.
 
-**Input Data:**
+---
 
-1. **Commit Message Prefix (Optional):** The beginning of a commit message the user may have started. Could be empty.
-2. **Git Diff:** Output of `git diff --staged`. *Primary information source* about the changes.
-3. **Commit History (Optional):** Recent commit messages from the project for context.
-4. **Issue References (Optional):** Issue numbers (e.g., [123, 456]) to integrate into the commit message.
+**EXAMPLE 1 (Few-shot)**
 
-**Output Format:**
+**CODE_CHANGES:**
+```diff
+-  def old_auth_method():
++  def new_secure_auth_method():
+```
+**COMMIT_HISTORY:**
+• feat: Implement user authentication module
+• refactor: Refactor database schema for better performance
+• fix: Resolve critical security vulnerability in login flow
+**PARTIAL_COMMIT_MESSAGE:** refactor: Rename old_auth_method to new_
+**COMPLETED_COMMIT_MESSAGE:** refactor: Rename old_auth_method to new_secure_auth_method for enhanced security and clarity"#;
 
-1. Ensure that no line exceeds 80 characters.
-2. You MUST output a structured commit message with the following format.
-"#;
-
-#[derive(Debug, Deserialize, JsonSchema, Serialize)]
-/// A record representing a git commit message
-pub struct CommitMsgContinuation {
-    /// The type of commit
-    pub r#type: String,
-    /// The commit title/summary
-    pub title: String,
-    /// The commit description/body
-    pub body: Option<String>,
-    /// Optional breaking changes introduced by the commit
-    pub breaking_changes: Option<String>,
-    /// Optional emoji to prepend to the commit title
-    pub emoji: Option<String>,
-    /// Optional footer to add issue tracker context
-    pub footer: Option<Vec<String>>,
-}
-
-impl std::fmt::Display for CommitMsgContinuation {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let prefix = if let Some(emoji) = &self.emoji {
-            format!("{} ", emoji)
-        } else {
-            String::new()
-        };
-        writeln!(f, "{}{}: {}", prefix, self.r#type, self.title)?;
-
-        // Add the body with proper spacing if it exists
-        if let Some(body) = &self.body {
-            writeln!(f, "\n{}", body)?;
-        }
-
-        // Add breaking changes with proper spacing if it exists
-        if let Some(breaking_changes) = &self.breaking_changes {
-            writeln!(f, "\nBREAKING CHANGES:\n{}", breaking_changes)?;
-        }
-
-        // Add footer with proper spacing if it exists
-        if let Some(footer) = &self.footer {
-            let footer_str = footer
-                .iter()
-                .map(|issue| issue.to_string())
-                .collect::<Vec<_>>()
-                .join(", ");
-            writeln!(f, "\n{}", footer_str)?;
-        }
-
-        Ok(())
-    }
-}
-
-/// Extracts commit data from the git diff using Gemini AI
+/// Generates a commit message using an AI model.
+///
+/// This function uses `rig`'s `Agent` to generate a commit message based on the staged git diff,
+/// recent commit history, and an optional user-provided prefix.
 ///
 /// # Arguments
-/// * `client` - The Gemini client instance
-/// * `git_diff` - The git diff content to analyze
-/// * `commit_history` - Previous commit messages for context
+/// * `prefix` - An optional prefix for the commit message.
+/// * `model` - The name of the AI model to use.
+/// * `history_depth` - The number of recent commits to include as context.
+/// * `ignored` - A list of file patterns to ignore from commit history.
 pub async fn commit_completion(
     prefix: &str,
     model: &str,
     history_depth: &usize,
     ignored: &Option<Vec<String>>,
-) -> Result<CommitMsgContinuation> {
+) -> Result<String> {
     // Exit early if diff is empty
     let diff = get_staged_diff().context("Getting staged changes failed")?;
     if diff.trim().is_empty() {
-        return Err(anyhow::anyhow!(
-            "Cannot generate commit message from empty diff"
-        ));
+        return Err(anyhow!("Cannot generate commit message from empty diff"));
     }
 
     let ignored_str_refs: Option<Vec<&str>> = ignored
@@ -106,37 +58,35 @@ pub async fn commit_completion(
         .map(|v| v.iter().map(|s| s.as_str()).collect());
     let history = get_recent_commits(history_depth, ignored_str_refs.as_deref())?;
 
-    let history_aware = history
+    let history_context = history
         .iter()
-        .map(|(oid, message)| format!("Commit Hash: {}\nCommit Message: {}", oid, message))
+        .map(|(oid, message)| {
+            format!(
+                "• {}: {}",
+                oid.to_string().chars().take(7).collect::<String>(),
+                message.lines().next().unwrap_or("")
+            )
+        })
         .collect::<Vec<_>>()
-        .join("\n---\n");
+        .join("\n");
 
     let client = gemini::Client::from_env();
+    let completion_model = client.completion_model(model);
 
-    // Configure and build the commit extractor with proper context
-    let commit_completion = client
-        .extractor::<CommitMsgContinuation>(model)
-        .preamble(PREAMBLE)
-        .build();
-
-    // Complete commit information using the AI model
-    let input = format!(
-        "Commit message prefix:\n{}\n\nRecent commit history:\n{}\n\n:\n{}",
-        prefix, history_aware, diff
+    let input_prompt = format!(
+        "CODE_CHANGES:\n```diff\n{}\n```\n\nCOMMIT_HISTORY:\n{}\n\nPARTIAL_COMMIT_MESSAGE: {}",
+        diff, history_context, prefix
     );
 
-    let commit = commit_completion
-        .extract(input.as_str())
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to extract commit data: {}", e))?;
+    let agent = AgentBuilder::new(completion_model)
+        .preamble(PREAMBLE)
+        .temperature(0.2)
+        .max_tokens(200)
+        .build();
 
-    // Log the extracted commit for debugging purposes
-    if let Ok(json) = serde_json::to_string_pretty(&commit) {
-        println!("Extracted Commit Data:\n{}", json);
-    }
+    let response = agent.prompt(input_prompt).await?;
 
-    Ok(commit)
+    Ok(response)
 }
 
 /// Get the last Nth commits from the repository
@@ -157,7 +107,7 @@ pub fn get_recent_commits(
         .collect())
 }
 
-fn get_head_commit(repo: &Repository) -> Result<git2::Commit> {
+fn get_head_commit(repo: &Repository) -> Result<git2::Commit<'_>> {
     repo.head()
         .context("Getting repository HEAD failed")?
         .peel_to_commit()

@@ -55,8 +55,13 @@ impl<M: CompletionModel> Reviewer<M> {
 }
 
 impl<M: CompletionModel> Prompt for Reviewer<M> {
-    async fn prompt(&self, prompt: impl Into<Message> + Send) -> Result<String, PromptError> {
-        let msg = self.agent.prompt(prompt).await?;
-        Ok(msg)
+    fn prompt(
+        &self,
+        prompt: impl Into<Message> + Send,
+    ) -> impl std::future::IntoFuture<Output = Result<String, PromptError>, IntoFuture: Send> {
+        async move {
+            let msg = self.agent.prompt(prompt).await?;
+            Ok(msg)
+        }
     }
 }

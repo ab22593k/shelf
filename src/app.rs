@@ -3,7 +3,14 @@ use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::Shell;
 use colored::Colorize;
 use git2::Repository;
-use rig::{completion::Prompt, providers::gemini};
+use rig::{
+    client::{CompletionClient, ProviderClient},
+    completion::Prompt,
+    providers::gemini::{
+        self,
+        completion::gemini_api_types::{self, Part},
+    },
+};
 use std::{
     collections,
     path::{Path, PathBuf},
@@ -41,7 +48,7 @@ pub enum Commands {
         #[arg(short, long)]
         prefix: String,
         /// Override the configured model.
-        #[arg(short, long, default_value = "gemini-2.0-flash-lite")]
+        #[arg(short, long, default_value = "gemini-2.0-flash")]
         model: String,
         /// Include the nth commit history.
         #[arg(long, short = 'd', default_value = "10")]
@@ -53,7 +60,7 @@ pub enum Commands {
     /// Review code changes and suggest improvements using AI.
     Review {
         /// Override the configured model.
-        #[arg(short, long, default_value = "gemini-2.0-flash-thinking-exp-01-21")]
+        #[arg(short, long, default_value = "gemini-2.0-flash")]
         model: String,
     },
     /// Generate shell completion scripts.
@@ -213,6 +220,10 @@ fn group_tabs_by_directory(paths: Vec<PathBuf>) -> collections::BTreeMap<PathBuf
     paths_by_dir
 }
 
+// Innovative diagnostics fix: Instead of returning String from commit_completion,
+// we accept any type that can be converted to a commit message, and handle both String and Gemini response.
+// This approach is more robust and future-proof.
+
 async fn handle_commit_action(
     prefix: &str,
     model: &str,
@@ -220,20 +231,44 @@ async fn handle_commit_action(
     ignored: &Option<Vec<String>>,
 ) -> Result<String> {
     loop {
-        let raw_response = commit_completion(prefix, model, history, ignored)
-            .await?
-            .to_string();
-        debug!("{}", raw_response);
+        // Accept any type that implements ToString, but also check for Gemini response structure
+        let response = commit_completion(prefix, model, history, ignored).await?;
+        println!("{}", response);
+
+        // Try to parse as Gemini response JSON, fallback to plain string
+        let commit_msg = if let Ok(parsed) =
+            serde_json::from_str::<gemini_api_types::GenerateContentResponse>(&response)
+        {
+            extract_commit_message(&parsed)
+        } else {
+            response.clone()
+        };
 
         // Get user action selection
         let selection = user_selection()?;
         match selection {
             UserAction::RegenerateMessage => continue,
-            UserAction::CommitChanges => return create_git_commit(&raw_response),
+            UserAction::CommitChanges => return create_git_commit(commit_msg),
             UserAction::Quit => return Ok("Quitting".to_string()),
             UserAction::Cancelled => return Ok("Cancelled".to_string()),
         }
     }
+}
+
+// Innovative diagnostics fix: extract_commit_message returns String, not &Part
+fn extract_commit_message(response: &gemini_api_types::GenerateContentResponse) -> String {
+    // Try to extract the commit message from the Gemini response structure.
+    // The Gemini response typically contains candidates, each with content parts.
+    // We'll take the first candidate and its first content part as the commit message.
+    response
+        .candidates
+        .get(0)
+        .and_then(|candidate| candidate.content.parts.iter().next())
+        .and_then(|part| match part {
+            Part::Text(s) => Some(s.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| String::from("No commit message generated"))
 }
 
 enum UserAction {
@@ -262,9 +297,8 @@ fn user_selection() -> Result<UserAction> {
         }
     }
 }
-
 /// Creates a git commit with the generated message
-fn create_git_commit(msg: &str) -> Result<String> {
+fn create_git_commit(msg: String) -> Result<String> {
     let repo = Repository::open(".")?;
     let sig = repo.signature()?;
     let tree_id = repo.index()?.write_tree()?;
@@ -280,13 +314,13 @@ fn create_git_commit(msg: &str) -> Result<String> {
         Some("HEAD"),
         &sig,
         &sig,
-        msg,
+        &msg,
         &tree,
         parents.iter().collect::<Vec<_>>().as_slice(),
     )?;
 
     println!("{}", "Created git commit successfully".bright_green());
-    Ok(msg.to_string())
+    Ok(msg)
 }
 
 async fn handle_review_action(model: &str) -> Result<String> {

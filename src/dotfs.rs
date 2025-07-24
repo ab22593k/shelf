@@ -125,7 +125,7 @@ impl DotFs {
     }
 
     /// Creates and returns a Git tree for the commit
-    fn prepare_commit_tree(&self, index: &mut Index) -> Result<git2::Tree> {
+    fn prepare_commit_tree(&self, index: &mut Index) -> Result<git2::Tree<'_>> {
         let tree_oid = index.write_tree()?;
         Ok(self.bare.find_tree(tree_oid)?)
     }
@@ -363,7 +363,7 @@ impl DotFs {
     }
 
     /// Retrieves the parent commits for the current HEAD.
-    fn get_parent_commits(&self) -> Result<Vec<git2::Commit>> {
+    fn get_parent_commits(&self) -> Result<Vec<git2::Commit<'_>>> {
         match self.bare.head() {
             Ok(head) => {
                 match head.target() {
@@ -402,7 +402,7 @@ impl DotFs {
     }
 
     /// Retrieves the repository status.
-    fn repository_status(&self) -> Result<Statuses> {
+    fn repository_status(&self) -> Result<Statuses<'_>> {
         let mut opts = git2::StatusOptions::new();
         opts.include_ignored(false)
             .include_untracked(false)
@@ -471,10 +471,6 @@ mod tests {
     use std::{env, fs};
     use tempfile::tempdir;
     use tracing::debug;
-
-    //--------------
-    // Test Helpers
-    //--------------
 
     struct TestEnv {
         manager: DotFs,
@@ -568,10 +564,6 @@ mod tests {
             matches!(self, Self::OutsideWorkTree(_))
         }
     }
-
-    //------------
-    // Test Cases
-    //------------
 
     #[test]
     fn git_installation_detection() -> Result<()> {
