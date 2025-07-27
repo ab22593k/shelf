@@ -5,13 +5,13 @@ use colored::Colorize;
 use git2::Repository;
 use rig::{
     client::{CompletionClient, ProviderClient},
-    completion::Prompt,
     providers::gemini::{
         self,
         completion::gemini_api_types::{self, Part},
     },
 };
 use std::{
+    borrow::Cow,
     collections,
     path::{Path, PathBuf},
 };
@@ -132,19 +132,27 @@ async fn handle_dotfs_command(action: &FileAction, mut repo: DotFs) -> Result<()
 
 async fn saving_handler(repo: &mut DotFs) -> Result<()> {
     // Save changes locally
-    if let Err(e) = repo.save_local_changes() {
-        return Err(anyhow!(format!("Failed to save dotfs changes: {}", e)));
-    }
+    repo.save_local_changes()
+        .context("Failed to save dotfs changes")?;
 
-    println!("{}", "DotFs saved successfully".bright_green());
+    print_success_message("DotFs saved successfully");
 
     Ok(())
+}
+
+fn print_path_status(path: &Path, action: &str, is_success: bool) {
+    let colored_display = if is_success {
+        path.display().to_string().bright_green()
+    } else {
+        path.display().to_string().bright_red()
+    };
+    println!("{action} {colored_display}");
 }
 
 fn tracking_handler(paths: &[PathBuf], repo: &mut DotFs) -> Result<()> {
     repo.track(paths).context("Tracking files failed")?;
     for path in paths {
-        println!("Tracking {}", path.display().to_string().bright_green());
+        print_path_status(path, "Tracking", true);
     }
     Ok(())
 }
@@ -152,7 +160,7 @@ fn tracking_handler(paths: &[PathBuf], repo: &mut DotFs) -> Result<()> {
 fn untracking_handler(paths: &[PathBuf], repo: &mut DotFs) -> Result<()> {
     repo.untrack(paths).context("Untracking files failed")?;
     for path in paths {
-        println!("Untracking {}", path.display().to_string().bright_red());
+        print_path_status(path, "Untracking", false);
     }
     Ok(())
 }
@@ -168,43 +176,7 @@ fn display_files(mut repo: DotFs, dirty: bool) -> Result<()> {
     };
     let paths_by_dir = group_tabs_by_directory(paths);
 
-    // Get the home directory for displaying relative paths
-    let user_dirs = directories::UserDirs::new().unwrap();
-    let home = user_dirs.home_dir();
-    for (i, (dir, files)) in paths_by_dir.clone().into_iter().enumerate() {
-        debug!("Processing directory: {:?} with {} files", dir, files.len());
-        if !dir.as_os_str().is_empty() {
-            let display_path = dir.strip_prefix(home).unwrap_or(&dir);
-            let prefix = if i == paths_by_dir.len() - 1 {
-                "└── "
-            } else {
-                "├── "
-            };
-            println!(
-                "{}{}{}{}",
-                prefix.blue().bold(),
-                "📁 ".blue().bold(),
-                display_path.display().to_string().blue().bold(),
-                ":".blue().bold()
-            );
-        }
-
-        for (j, file) in files.clone().into_iter().enumerate() {
-            let display_path = file.strip_prefix(home).unwrap_or(&file);
-            let file_type = if file.is_dir() { "📁" } else { "" };
-            let prefix = if j == files.len() - 1 {
-                "    └── "
-            } else {
-                "    ├── "
-            };
-            println!(
-                "{}{} {}",
-                prefix.bright_green(),
-                file_type.bright_green(),
-                display_path.display()
-            );
-        }
-    }
+    print_grouped_paths(&paths_by_dir);
     Ok(())
 }
 
@@ -219,6 +191,86 @@ fn group_tabs_by_directory(paths: Vec<PathBuf>) -> collections::BTreeMap<PathBuf
 
     paths_by_dir
 }
+
+fn get_home_dir() -> PathBuf {
+    directories::UserDirs::new()
+        .map(|dirs| dirs.home_dir().to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("/")) // Fallback to root if home dir cannot be determined
+}
+
+fn display_path_relative_to_home<'a>(path: &'a Path, home: &'a Path) -> Cow<'a, Path> {
+    path.strip_prefix(home)
+        .map_or_else(|_| Cow::Borrowed(path), Cow::Borrowed)
+}
+
+fn print_directory_header(index: usize, total_dirs: usize, dir_path: &Path, home_dir: &Path) {
+    let display_path = display_path_relative_to_home(dir_path, home_dir);
+    let prefix = if index == total_dirs - 1 {
+        "└── "
+    } else {
+        "├── "
+    };
+    println!(
+        "{}{}{}{}",
+        prefix.blue().bold(),
+        "📁 ".blue().bold(),
+        display_path.display().to_string().blue().bold(),
+        ":".blue().bold()
+    );
+}
+
+fn print_file_entry(index: usize, total_files: usize, file_path: &Path, home_dir: &Path) {
+    let display_path = display_path_relative_to_home(file_path, home_dir);
+    let file_type = if file_path.is_dir() { "📁" } else { "" };
+    let prefix = if index == total_files - 1 {
+        "    └── "
+    } else {
+        "    ├── "
+    };
+    println!(
+        "{}{} {}",
+        prefix.bright_green(),
+        file_type.bright_green(),
+        display_path.display()
+    );
+}
+
+fn print_grouped_paths(paths_by_dir: &collections::BTreeMap<PathBuf, Vec<PathBuf>>) {
+    let home = get_home_dir();
+    let total_dirs = paths_by_dir.len();
+
+    for (i, (dir, files)) in paths_by_dir.iter().enumerate() {
+        debug!("Processing directory: {:?} with {} files", dir, files.len());
+        if !dir.as_os_str().is_empty() {
+            print_directory_header(i, total_dirs, dir, &home);
+        }
+
+        let total_files = files.len();
+        for (j, file) in files.iter().enumerate() {
+            print_file_entry(j, total_files, file, &home);
+        }
+    }
+}
+
+async fn generate_commit_message(
+    prefix: &str,
+    model: &str,
+    history: &usize,
+    ignored: &Option<Vec<String>>,
+) -> Result<String> {
+    let response = commit_completion(prefix, model, history, ignored).await?;
+
+    // If the response is a Gemini JSON structure, extract the commit message; otherwise, use the plain string
+    let commit_msg = if let Ok(parsed) =
+        serde_json::from_str::<gemini_api_types::GenerateContentResponse>(&response)
+    {
+        extract_commit_message(&parsed)
+    } else {
+        response
+    };
+    Ok(commit_msg)
+}
+
 async fn handle_commit_action(
     prefix: &str,
     model: &str,
@@ -227,16 +279,7 @@ async fn handle_commit_action(
 ) -> Result<String> {
     loop {
         // Generate commit message using AI model
-        let response = commit_completion(prefix, model, history, ignored).await?;
-
-        // If the response is a Gemini JSON structure, extract the commit message; otherwise, use the plain string
-        let commit_msg = if let Ok(parsed) =
-            serde_json::from_str::<gemini_api_types::GenerateContentResponse>(&response)
-        {
-            extract_commit_message(&parsed)
-        } else {
-            response.clone()
-        };
+        let commit_msg = generate_commit_message(prefix, model, history, ignored).await?;
 
         println!("{commit_msg}",);
 
@@ -311,7 +354,7 @@ fn create_git_commit(msg: String) -> Result<String> {
         parents.iter().collect::<Vec<_>>().as_slice(),
     )?;
 
-    println!("{}", "Created git commit successfully".bright_green());
+    print_success_message("Created git commit successfully");
     Ok(msg)
 }
 
@@ -323,12 +366,13 @@ async fn handle_review_action(model: &str) -> Result<String> {
     let msg = run_with_progress(|| async {
         let reviewer = Reviewer::new(agent.completion_model(model)).with_diff(&diff);
 
-        reviewer
-            .prompt(reviewer.prompt.as_str())
-            .await
-            .map_err(|e| anyhow!(e))
+        reviewer.review().await.map_err(|e| anyhow!(e))
     })
     .await?;
 
     Ok(msg)
+}
+
+fn print_success_message(msg: &str) {
+    println!("{}", msg.bright_green());
 }

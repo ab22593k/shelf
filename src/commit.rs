@@ -129,17 +129,15 @@ pub fn get_recent_commits(
 
 /// Determines if a commit should be ignored based on file patterns.
 fn should_ignore_commit(commit: &Commit, ignore_patterns: Option<&[&str]>) -> bool {
-    if let Some(patterns) = ignore_patterns {
-        if let Ok(tree) = commit.tree() {
-            for pattern in patterns {
-                if tree.iter().any(|entry| {
-                    entry
-                        .name()
-                        .map(|name| name.contains(pattern))
-                        .unwrap_or(false)
-                }) {
-                    return true;
-                }
+    if let (Some(patterns), Ok(tree)) = (ignore_patterns, commit.tree()) {
+        for pattern in patterns {
+            if tree.iter().any(|entry| {
+                entry
+                    .name()
+                    .map(|name| name.contains(pattern))
+                    .unwrap_or(false)
+            }) {
+                return true;
             }
         }
     }

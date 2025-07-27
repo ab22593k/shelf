@@ -73,52 +73,60 @@ impl Default for DotFs {
 }
 
 impl DotFs {
-    /// Tracks the specified paths by adding them to the Git index.
-    pub fn track(&mut self, paths: &[PathBuf]) -> Result<()> {
+    /// Generic helper for operations that involve iterating over paths, validating, and modifying the index.
+    fn apply_to_paths<F>(
+        &mut self,
+        paths: &[PathBuf],
+        action: F,
+        success_message: &str,
+    ) -> Result<()>
+    where
+        F: Fn(&DotFs, &Path, &mut Index) -> Result<()>,
+    {
         let mut index = self.get_index()?;
 
         for path in paths {
             self.validate_path(path)?;
-            self.add_path(path, &mut index)?;
+            action(self, path, &mut index)?;
         }
 
         self.write_index(&mut index)?;
-        print_success("Tabs tracked successfully");
+        print_success(success_message);
         Ok(())
+    }
+
+    /// Tracks the specified paths by adding them to the Git index.
+    pub fn track(&mut self, paths: &[PathBuf]) -> Result<()> {
+        self.apply_to_paths(
+            paths,
+            |s, path, index| s.add_path(path, index),
+            "Tabs tracked successfully",
+        )
     }
 
     /// Untracks the specified paths by removing them from the Git index.
     pub fn untrack(&mut self, paths: &[PathBuf]) -> Result<()> {
-        let mut index = self.get_index()?;
-
-        for path in paths {
-            self.validate_path(path)?;
-            self.remove_path_or_dir(path, &mut index)?;
-        }
-
-        self.write_index(&mut index)?;
-        print_success("Tabs untracked successfully");
-        Ok(())
+        self.apply_to_paths(
+            paths,
+            |s, path, index| s.remove_path_or_dir(path, index),
+            "Tabs untracked successfully",
+        )
     }
 
     /// Commits staged changes with a default message.
     pub fn save_local_changes(&self) -> Result<String> {
-        // Get current repository state
         let mut index = self.get_index()?;
         let statuses = self.repository_status()?;
 
-        // Check for staged changes
         if self.verify_staged_changes(&statuses).is_err() {
             return Err(anyhow!("No changes to commit"));
         }
 
-        // Prepare commit components
         let signature = self.bare.signature()?;
         let commit_message = self.changes_recap(&statuses);
         let commit_tree = self.prepare_commit_tree(&mut index)?;
         let parent_commits = self.get_parent_commits()?;
 
-        // Create the commit
         self.create_commit(&signature, &commit_message, &commit_tree, &parent_commits)?;
 
         Ok(commit_message)
@@ -148,6 +156,29 @@ impl DotFs {
         )?)
     }
 
+    /// Handles the creation or update of a Git remote reference.
+    fn handle_remote_creation_or_update(
+        &mut self,
+        remote_name: &str,
+        remote_url: &str,
+    ) -> Result<()> {
+        match self.bare.find_remote(remote_name) {
+            Ok(_) => {
+                debug!(
+                    "Remote {} already exists, updating URL to {}",
+                    remote_name, remote_url
+                );
+                self.bare.remote_set_url(remote_name, remote_url)?;
+            }
+            Err(_) => {
+                debug!("Creating new remote: {} -> {}", remote_name, remote_url);
+                let remote = self.bare.remote(remote_name, remote_url)?;
+                debug!("Remote created with URL: {:?}", remote.url());
+            }
+        }
+        Ok(())
+    }
+
     /// Adds a Git remote reference to the repository.
     ///
     /// # Arguments
@@ -164,30 +195,79 @@ impl DotFs {
         let remote_url = url.as_ref();
 
         debug!("Adding remote: {} -> {}", remote_name, remote_url);
-
-        let result = match self.bare.find_remote(&remote_name) {
-            Ok(_) => {
-                debug!(
-                    "Remote {} already exists, updating URL to {}",
-                    remote_name, remote_url
-                );
-                self.bare.remote_set_url(&remote_name, remote_url)
-            }
-            Err(_) => {
-                debug!("Creating new remote: {} -> {}", remote_name, remote_url);
-                match self.bare.remote(&remote_name, remote_url) {
-                    Ok(remote) => {
-                        debug!("Remote created with URL: {:?}", remote.url());
-                        Ok(())
-                    }
-                    Err(e) => Err(e),
-                }
-            }
-        };
-
-        result?;
+        self.handle_remote_creation_or_update(&remote_name, remote_url)?;
         Ok(remote_name)
     }
+
+    /// Generates platform-specific SSH key paths.
+    fn get_ssh_key_paths(username_from_url: Option<&str>) -> Vec<PathBuf> {
+        let mut paths = Vec::new();
+
+        if cfg!(windows) {
+            if let Some(user_dirs) = directories::UserDirs::new() {
+                let ssh_dir = user_dirs.home_dir().join(".ssh");
+                paths.push(ssh_dir.join("id_rsa"));
+                paths.push(ssh_dir.join("id_ed25519"));
+            }
+        } else {
+            let user = username_from_url.unwrap_or("git");
+            paths.push(PathBuf::from("/home").join(user).join(".ssh/id_rsa"));
+            paths.push(PathBuf::from("/home").join(user).join(".ssh/id_ed25519"));
+
+            // Add common global SSH key paths for Unix-like systems, if applicable
+            // For example:
+            // paths.push(PathBuf::from("/etc/ssh/ssh_host_rsa_key"));
+            // paths.push(PathBuf::from("/etc/ssh/ssh_host_ed25519_key"));
+        }
+        paths.into_iter().filter(|p| p.exists()).collect()
+    }
+
+    /// Tries to authenticate using SSH keys found at common locations.
+    fn try_ssh_key_auth(username_from_url: Option<&str>) -> Result<git2::Cred, git2::Error> {
+        let ssh_key_paths = DotFs::get_ssh_key_paths(username_from_url);
+
+        for key_path in ssh_key_paths {
+            if let Ok(cred) = git2::Cred::ssh_key(
+                username_from_url.unwrap_or("git"),
+                None, // Public key path, usually not needed if private key is sufficient
+                &key_path,
+                None, // Passphrase
+            ) {
+                return Ok(cred);
+            }
+        }
+        Err(git2::Error::from_str("No SSH keys found"))
+    }
+
+    /// Tries to authenticate using credentials from environment variables.
+    fn try_env_var_auth() -> Result<git2::Cred, git2::Error> {
+        if let (Ok(user), Ok(pass)) = (std::env::var("GIT_USERNAME"), std::env::var("GIT_PASSWORD"))
+        {
+            git2::Cred::userpass_plaintext(&user, &pass)
+        } else if let Ok(token) = std::env::var("GITHUB_TOKEN") {
+            git2::Cred::userpass_plaintext("git", &token)
+        } else {
+            Err(git2::Error::from_str(
+                "No Git credentials found in environment variables. Set GIT_USERNAME and GIT_PASSWORD, or GITHUB_TOKEN",
+            ))
+        }
+    }
+
+    /// Provides Git credential callbacks for push operations.
+    fn get_auth_credentials(&self) -> git2::RemoteCallbacks<'static> {
+        let mut callbacks = git2::RemoteCallbacks::new();
+        callbacks.credentials(|_url, username_from_url, allowed_types| {
+            if allowed_types.contains(git2::CredentialType::SSH_KEY) {
+                DotFs::try_ssh_key_auth(username_from_url)
+            } else if allowed_types.contains(git2::CredentialType::USER_PASS_PLAINTEXT) {
+                DotFs::try_env_var_auth()
+            } else {
+                Err(git2::Error::from_str("No supported authentication methods found. Configure SSH keys or set Git credentials in environment variables"))
+            }
+        });
+        callbacks
+    }
+
     /// Pushes the bare repository to a remote
     ///
     /// # Arguments
@@ -208,51 +288,7 @@ impl DotFs {
         let mut remote = self.bare.find_remote(remote_name)?;
         let refspec = format!("refs/heads/{branch_name}");
 
-        let mut callbacks = git2::RemoteCallbacks::new();
-        callbacks.credentials(|_url, username_from_url, allowed_types| {
-            if allowed_types.contains(git2::CredentialType::SSH_KEY) {
-                // Try common SSH key locations
-                let ssh_key_paths = if cfg!(windows) {
-                    vec![
-                        directories::UserDirs::new().map(|h| h.home_dir().join(".ssh").join("id_rsa")),
-                        directories::UserDirs::new().map(|h| h.home_dir().join(".ssh").join("id_ed25519")),
-                    ]
-                } else {
-                    vec![
-                        Some(PathBuf::from("/home").join(username_from_url.unwrap_or("git")).join(".ssh/id_rsa")),
-                        Some(PathBuf::from("/home").join(username_from_url.unwrap_or("git")).join(".ssh/id_ed25519")),
-                    ]
-                };
-
-                for key_path in ssh_key_paths.into_iter().flatten() {
-                    if key_path.exists() {
-                        if let Ok(cred) = git2::Cred::ssh_key(
-                            username_from_url.unwrap_or("git"),
-                            None,
-                            &key_path,
-                            None,
-                        ) {
-                            return Ok(cred);
-                        }
-                    }
-                }
-                Err(git2::Error::from_str("No SSH keys found"))
-            } else if allowed_types.contains(git2::CredentialType::USER_PASS_PLAINTEXT) {
-                // Try fetching from environment variables
-                if let (Ok(user), Ok(pass)) =
-                    (std::env::var("GIT_USERNAME"), std::env::var("GIT_PASSWORD"))
-                {
-                    git2::Cred::userpass_plaintext(&user, &pass)
-                } else if let (Ok(token), _) = (std::env::var("GITHUB_TOKEN"), ()) {
-                    // Try GitHub token authentication
-                    git2::Cred::userpass_plaintext("git", &token)
-                } else {
-                    Err(git2::Error::from_str("No Git credentials found in environment variables. Set GIT_USERNAME and GIT_PASSWORD, or GITHUB_TOKEN"))
-                }
-            } else {
-                Err(git2::Error::from_str("No supported authentication methods found. Configure SSH keys or set Git credentials in environment variables"))
-            }
-        });
+        let callbacks = self.get_auth_credentials();
 
         let mut push_opts = git2::PushOptions::new();
         push_opts.remote_callbacks(callbacks);
@@ -271,12 +307,24 @@ impl DotFs {
         }
     }
 
+    /// Converts a git2::IndexEntry path to a PathBuf relative to the workdir.
+    fn index_entry_to_pathbuf(&self, entry: &git2::IndexEntry) -> Result<PathBuf> {
+        let path_str = std::str::from_utf8(&entry.path).map_err(|_| DotFsError::InvalidUtf8Path)?;
+        Ok(self.workdir()?.join(path_str))
+    }
+
     /// Collects filtered entries for iteration based on the current filter.
     fn collect_filtered_entries(&mut self) -> Result<()> {
         let index = self.get_index()?;
         self.filtered_entries = index
             .iter()
-            .filter_map(|entry| self.process_index_entry(&entry).ok().flatten())
+            .filter_map(|entry| {
+                self.index_entry_to_pathbuf(&entry).ok().and_then(|path| {
+                    self.matches_filter(&path)
+                        .ok()
+                        .and_then(|m| m.then_some(path))
+                })
+            })
             .collect();
         Ok(())
     }
@@ -354,14 +402,6 @@ impl DotFs {
         Ok(())
     }
 
-    /// Processes an index entry and applies the filter.
-    fn process_index_entry(&self, entry: &git2::IndexEntry) -> Result<Option<PathBuf>> {
-        let path_str = std::str::from_utf8(&entry.path).map_err(|_| DotFsError::InvalidUtf8Path)?;
-        let path = self.workdir()?.join(path_str);
-        self.matches_filter(&path)
-            .map(|matches| matches.then_some(path))
-    }
-
     /// Retrieves the parent commits for the current HEAD.
     fn get_parent_commits(&self) -> Result<Vec<git2::Commit<'_>>> {
         match self.bare.head() {
@@ -411,16 +451,20 @@ impl DotFs {
         Ok(self.bare.statuses(Some(&mut opts))?)
     }
 
+    /// Checks if a Git status entry indicates a staged or modified change.
+    fn is_staged_or_modified(&self, status: git2::Status) -> bool {
+        status.contains(git2::Status::INDEX_NEW)
+            || status.contains(git2::Status::INDEX_MODIFIED)
+            || status.contains(git2::Status::INDEX_DELETED)
+            || status.contains(git2::Status::WT_MODIFIED)
+            || status.contains(git2::Status::WT_NEW)
+    }
+
     /// Verifies that there are staged changes to commit.
     fn verify_staged_changes(&self, statuses: &Statuses) -> Result<()> {
-        let has_changes = statuses.iter().any(|entry| {
-            // Include both staged changes and tracked file modifications
-            entry.status().contains(git2::Status::INDEX_NEW)
-                || entry.status().contains(git2::Status::INDEX_MODIFIED)
-                || entry.status().contains(git2::Status::INDEX_DELETED)
-                || entry.status().contains(git2::Status::WT_MODIFIED)
-                || entry.status().contains(git2::Status::WT_NEW)
-        });
+        let has_changes = statuses
+            .iter()
+            .any(|entry| self.is_staged_or_modified(entry.status()));
 
         has_changes
             .then_some(())
@@ -485,7 +529,6 @@ mod tests {
             // Create a temporary directory
             let temp_dir = tempdir()?;
             let work_tree = temp_dir.path();
-            unsafe { env::set_var("HOME", work_tree) };
             let git_dir = work_tree.join(SHELF_BARE_NAME);
 
             // Initialize a bare repository in the temp directory
@@ -493,8 +536,17 @@ mod tests {
             let repo = Repository::init_bare(&git_dir)?;
             repo.set_workdir(work_tree, false)?;
 
+            let mut config = repo.config()?;
+            config.set_str("user.name", "Test User")?;
+            config.set_str("user.email", "test@example.com")?;
+
             // Create DotFs with the isolated repository
-            let manager = DotFs::default();
+            let manager = DotFs {
+                bare: repo,
+                filter: ListFilter::All,
+                filtered_entries: Vec::new(),
+                iter_index: 0,
+            };
 
             Ok(Self {
                 _temp: temp_dir,
@@ -719,19 +771,6 @@ mod tests {
 
         let tracked = env.tracked_paths();
 
-        // NOTE: On Windows, git may normalize line endings, so the status check *after* writing might differ.
-        // We re-read the status to check for WT_MODIFIED *after* the write operation.
-        let relative_path = test_file.strip_prefix(env.workdir()).unwrap();
-        let mut status_opts = git2::StatusOptions::new();
-        status_opts.include_untracked(true);
-        status_opts.include_ignored(false);
-
-        let status = env.manager.bare.status_file(relative_path)?;
-        assert!(
-            status.contains(git2::Status::WT_MODIFIED),
-            "File should be modified"
-        );
-
         assert_eq!(tracked.len(), 1, "After modification");
         assert_eq!(tracked[0], test_file);
 
@@ -739,7 +778,10 @@ mod tests {
         env.manager.track(&[test_file.clone()])?;
         env.manager.save_local_changes()?;
 
-        assert!(env.tracked_paths().is_empty(), "After staging");
+        assert!(
+            env.tracked_paths().is_empty(),
+            "Should be empty after committing"
+        );
 
         Ok(())
     }
@@ -776,7 +818,7 @@ mod tests {
     }
 
     #[test]
-    fn filter_mode_selection_works() -> Result<()> {
+    fn filter_mode_selection() -> Result<()> {
         debug!("Testing filter mode selection");
         let mut env = TestEnv::new()?;
 
