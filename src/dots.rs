@@ -5,7 +5,7 @@ use git2::{Index, Repository, Statuses};
 use tracing::debug;
 
 use crate::{
-    error::AppError,
+    error::ShelfError,
     utils::{shine_success, verify_git_presence},
 };
 
@@ -267,8 +267,8 @@ impl Dots {
     }
 
     /// Converts a git2::IndexEntry path to a PathBuf relative to the workdir.
-    fn index_entry_to_pathbuf(&self, entry: &git2::IndexEntry) -> Result<PathBuf, AppError> {
-        let path_str = std::str::from_utf8(&entry.path).map_err(|_| AppError::InvalidUtf8Path)?;
+    fn index_entry_to_pathbuf(&self, entry: &git2::IndexEntry) -> Result<PathBuf, ShelfError> {
+        let path_str = std::str::from_utf8(&entry.path).map_err(|_| ShelfError::InvalidUtf8Path)?;
         Ok(self.workdir()?.join(path_str))
     }
 
@@ -339,10 +339,10 @@ impl Dots {
     /// Validates a path before operations.
     fn validate_path(&self, path: &Path) -> Result<()> {
         if !path.exists() {
-            return Err(AppError::PathNotFound(path.to_path_buf()).into());
+            return Err(ShelfError::PathNotFound(path.to_path_buf()).into());
         }
         if !path.starts_with(self.workdir()?) {
-            return Err(AppError::OutsideWorkTree(path.to_path_buf()).into());
+            return Err(ShelfError::OutsideWorkTree(path.to_path_buf()).into());
         }
         Ok(())
     }
@@ -377,22 +377,22 @@ impl Dots {
 
     /// Retrieves the repository index.
     fn get_index(&self) -> Result<Index> {
-        Ok(self.bare.index().map_err(AppError::Git)?)
+        Ok(self.bare.index().map_err(ShelfError::Git)?)
     }
 
     /// Writes the index to disk.
     fn write_index(&self, index: &mut Index) -> Result<()> {
-        index.write().map_err(AppError::Git)?;
+        index.write().map_err(ShelfError::Git)?;
         Ok(())
     }
 
     /// Gets the working directory of the repository.
-    fn workdir(&self) -> Result<&Path, AppError> {
-        self.bare.workdir().ok_or(AppError::GitNotInstalled)
+    fn workdir(&self) -> Result<&Path, ShelfError> {
+        self.bare.workdir().ok_or(ShelfError::GitNotInstalled)
     }
 
     /// Computes the relative path from the working directory.
-    fn get_relative_path<'a>(&self, path: &'a Path) -> Result<&'a Path, AppError> {
+    fn get_relative_path<'a>(&self, path: &'a Path) -> Result<&'a Path, ShelfError> {
         Ok(path.strip_prefix(self.workdir()?)?)
     }
 
@@ -568,7 +568,7 @@ mod tests {
         // SAFETY: Test environment should run without concurrent access
         unsafe { env::set_var("PATH", "") }
         let err = verify_git_presence().unwrap_err();
-        assert!(matches!(err, AppError::GitNotInstalled));
+        assert!(matches!(err, ShelfError::GitNotInstalled));
 
         // SAFETY: Test environment should run without concurrent access
         // Restoring original PATH value
@@ -634,8 +634,8 @@ mod tests {
         let missing = env.workdir().join("ghost.txt");
         let err = env.manager.track(&[missing]).unwrap_err();
         assert!(matches!(
-            err.downcast_ref::<AppError>(),
-            Some(AppError::PathNotFound(_))
+            err.downcast_ref::<ShelfError>(),
+            Some(ShelfError::PathNotFound(_))
         ));
 
         // External path
@@ -646,8 +646,8 @@ mod tests {
         };
         let err = env.manager.track(&[external]).unwrap_err();
         assert!(matches!(
-            err.downcast_ref::<AppError>(),
-            Some(AppError::OutsideWorkTree(_))
+            err.downcast_ref::<ShelfError>(),
+            Some(ShelfError::OutsideWorkTree(_))
         ));
 
         Ok(())

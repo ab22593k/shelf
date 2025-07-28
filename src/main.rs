@@ -12,8 +12,12 @@ use crate::config::init_dots_repo;
 use anyhow::Result;
 use clap::Parser;
 use colored::Colorize;
-use std::env;
 use std::process;
+
+#[cfg(debug_assertions)]
+use std::env;
+
+#[cfg(debug_assertions)]
 use tracing::level_filters::LevelFilter;
 
 #[cfg(debug_assertions)]

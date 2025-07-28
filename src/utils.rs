@@ -5,7 +5,7 @@ use colored::Colorize;
 use git2::{DiffOptions, Repository};
 use indicatif::{ProgressBar, ProgressStyle};
 
-use crate::error::AppError;
+use crate::error::ShelfError;
 
 pub async fn spin_progress<Op, Fut, Res>(operation: Op) -> Result<Res>
 where
@@ -30,8 +30,8 @@ pub fn shine_success(sparkle: &str) {
     println!("{} {}", "✓".bright_green(), sparkle.bold().green());
 }
 
-pub fn verify_git_presence() -> Result<(), AppError> {
-    which::which("git").map_err(|_| AppError::GitNotInstalled)?;
+pub fn verify_git_presence() -> Result<(), ShelfError> {
+    which::which("git").map_err(|_| ShelfError::GitNotInstalled)?;
     Ok(())
 }
 
@@ -59,11 +59,7 @@ fn sculpt_difference(forge: &Repository) -> Result<git2::Diff<'_>> {
         Ok(crest) => crest
             .peel_to_tree()
             .context("Crest state retrieval failed")?,
-        Err(_) => {
-            // Handle the genesis commit scenario where HEAD is nascent
-
-            forge.find_tree(forge.treebuilder(None)?.write()?)?
-        }
+        Err(_) => forge.find_tree(forge.treebuilder(None)?.write()?)?,
     };
 
     let crucible_state = forge
@@ -75,7 +71,6 @@ fn sculpt_difference(forge: &Repository) -> Result<git2::Diff<'_>> {
         .find_tree(crucible_state)
         .context("Crucible state lookup failed")?;
 
-    // Forge differences between crest and crucible states
     forge
         .diff_tree_to_tree(
             Some(&crest_state),

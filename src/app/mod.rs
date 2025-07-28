@@ -160,7 +160,7 @@ fn group_tabs_by_directory(paths: Vec<PathBuf>) -> collections::BTreeMap<PathBuf
 fn get_home_dir() -> PathBuf {
     directories::UserDirs::new()
         .map(|dirs| dirs.home_dir().to_path_buf())
-        .unwrap_or_else(|| PathBuf::from("/")) // Fallback to root if home dir cannot be determined
+        .unwrap_or_else(|| PathBuf::from("/"))
 }
 
 fn display_path_relative_to_home<'a>(path: &'a Path, home: &'a Path) -> Cow<'a, Path> {
@@ -181,7 +181,7 @@ fn print_grouped_paths(paths_by_dir: &collections::BTreeMap<PathBuf, Vec<PathBuf
     for (dir, files) in paths_by_dir.iter() {
         let display_dir_cow = display_path_relative_to_home(dir, &home);
         let display_dir_str = if display_dir_cow.as_os_str().is_empty() {
-            ".".to_string() // Represent root/empty path as '.' for display
+            ".".to_string() // Represent empty path as '.' for display
         } else {
             display_dir_cow.display().to_string()
         };
@@ -204,9 +204,9 @@ fn print_grouped_paths(paths_by_dir: &collections::BTreeMap<PathBuf, Vec<PathBuf
     // Print Headers
     println!(
         "{:<width_dir$} {:<width_item$} {:<4}",
-        "DIRECTORY".bold().underline(),
-        "ITEM".bold().underline(),
-        "TYPE".bold().underline(),
+        "DIRECTORY".bold(),
+        "ITEM".bold(),
+        "TYPE".bold(),
         width_dir = max_dir_len,
         width_item = max_item_len,
     );
@@ -223,9 +223,9 @@ fn print_grouped_paths(paths_by_dir: &collections::BTreeMap<PathBuf, Vec<PathBuf
     for (dir_str, item_name, item_type) in rows {
         // Pad the string first to the determined width, then apply color.
         // This ensures padding is based on visual length, not byte length including ANSI escape codes.
-        let padded_dir = format!("{: <width_dir$}", dir_str, width_dir = max_dir_len);
-        let padded_item = format!("{: <width_item$}", item_name, width_item = max_item_len);
-        let padded_type = format!("{: <4}", item_type); // Type column is fixed width for "File" or "Dir"
+        let padded_dir = format!("{dir_str: <max_dir_len$}");
+        let padded_item = format!("{item_name: <max_item_len$}");
+        let padded_type = format!("{item_type: <4}");
 
         println!(
             "{} {} {}",
@@ -327,8 +327,6 @@ fn edit_message_with_editor(initial_message: &str) -> Result<String> {
     // Read the modified content from the temporary file
     let edited_message = std::fs::read_to_string(temp_file.path())
         .context("Failed to read edited message from temporary file")?;
-
-    // The temporary file will be automatically deleted when `temp_file` goes out of scope
 
     Ok(edited_message)
 }
