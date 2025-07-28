@@ -15,6 +15,7 @@ use std::env;
 use std::process;
 use tracing::level_filters::LevelFilter;
 
+#[cfg(debug_assertions)]
 async fn initialize_tracing() {
     let level = match env::var("RUST_LOG")
         .unwrap_or_else(|_| "off".to_string())
@@ -44,7 +45,9 @@ async fn initialize_tracing() {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    #[cfg(debug_assertions)]
     initialize_tracing().await;
+
     colored::control::set_override(true);
 
     let cli = Shelf::parse();

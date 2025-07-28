@@ -14,7 +14,9 @@ use std::{
     borrow::Cow,
     collections,
     path::{Path, PathBuf},
+    process::Command,
 };
+use tempfile::NamedTempFile;
 use tracing::debug;
 
 use crate::{
@@ -277,21 +279,76 @@ async fn handle_commit_action(
     history: &usize,
     ignored: &Option<Vec<String>>,
 ) -> Result<String> {
-    loop {
-        // Generate commit message using AI model
-        let commit_msg = generate_commit_message(prefix, model, history, ignored).await?;
+    let mut current_commit_msg = String::new();
 
-        println!("{commit_msg}",);
+    loop {
+        if current_commit_msg.is_empty() {
+            // Generate commit message using AI model only if not already generated or edited
+            current_commit_msg = generate_commit_message(prefix, model, history, ignored).await?;
+        }
+
+        println!("{current_commit_msg}",);
 
         // Get user action selection
         let selection = user_selection()?;
         match selection {
-            UserAction::RegenerateMessage => continue,
-            UserAction::CommitChanges => return create_git_commit(commit_msg),
+            UserAction::RegenerateMessage => {
+                // Clear to force regeneration
+                current_commit_msg.clear();
+
+                continue;
+            }
+            UserAction::EditWithEditor => {
+                current_commit_msg = edit_message_with_editor(&current_commit_msg)
+                    .context("Failed to edit commit message with editor")?;
+
+                // After editing, show the new message and prompt again
+                continue;
+            }
+            UserAction::CommitChanges => return create_git_commit(current_commit_msg),
             UserAction::Quit => return Ok("Quitting".to_string()),
             UserAction::Cancelled => return Ok("Cancelled".to_string()),
         }
     }
+}
+
+fn edit_message_with_editor(initial_message: &str) -> Result<String> {
+    // Create a temporary file
+    let mut temp_file = NamedTempFile::new().context("Failed to create temporary file")?;
+
+    // Write the initial message to the temporary file
+    std::io::Write::write_all(&mut temp_file, initial_message.as_bytes())
+        .context("Failed to write initial message to temporary file")?;
+
+    // Determine the editor to use
+    let editor = std::env::var("GIT_EDITOR")
+        .or_else(|_| std::env::var("EDITOR"))
+        .or_else(|_| std::env::var("VISUAL"))
+        .unwrap_or_else(|_| {
+            if cfg!(target_os = "windows") {
+                "notepad".to_string()
+            } else {
+                "vi".to_string()
+            }
+        });
+
+    // Spawn the editor process
+    let status = Command::new(&editor)
+        .arg(temp_file.path())
+        .status()
+        .with_context(|| format!("Failed to open editor: {editor}",))?;
+
+    if !status.success() {
+        return Err(anyhow!("Editor exited with a non-zero status."));
+    }
+
+    // Read the modified content from the temporary file
+    let edited_message = std::fs::read_to_string(temp_file.path())
+        .context("Failed to read edited message from temporary file")?;
+
+    // The temporary file will be automatically deleted when `temp_file` goes out of scope
+
+    Ok(edited_message)
 }
 
 fn extract_commit_message(response: &gemini_api_types::GenerateContentResponse) -> String {
@@ -309,13 +366,19 @@ fn extract_commit_message(response: &gemini_api_types::GenerateContentResponse) 
 enum UserAction {
     RegenerateMessage,
     CommitChanges,
+    EditWithEditor,
     Quit,
     Cancelled,
 }
 
 fn user_selection() -> Result<UserAction> {
     use dialoguer::{Select, theme::ColorfulTheme};
-    let options = vec!["Regenerate message", "Commit changes", "Quit"];
+    let options = vec![
+        "Regenerate message",
+        "Edit with Editor",
+        "Commit changes",
+        "Quit",
+    ];
     let selection = Select::with_theme(&ColorfulTheme::default())
         .with_prompt("What would you like to do next?")
         .default(0)
@@ -324,8 +387,9 @@ fn user_selection() -> Result<UserAction> {
 
     match selection {
         Ok(0) => Ok(UserAction::RegenerateMessage),
-        Ok(1) => Ok(UserAction::CommitChanges),
-        Ok(2) => Ok(UserAction::Quit),
+        Ok(1) => Ok(UserAction::EditWithEditor),
+        Ok(2) => Ok(UserAction::CommitChanges),
+        Ok(3) => Ok(UserAction::Quit),
         _ => {
             println!("\nInvalid selection");
             Ok(UserAction::Cancelled)

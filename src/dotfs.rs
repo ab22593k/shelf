@@ -405,16 +405,14 @@ impl DotFs {
     /// Retrieves the parent commits for the current HEAD.
     fn get_parent_commits(&self) -> Result<Vec<git2::Commit<'_>>> {
         match self.bare.head() {
-            Ok(head) => {
-                match head.target() {
-                    Some(oid) => match self.bare.find_commit(oid) {
-                        Ok(commit) => Ok(vec![commit]),
-                        Err(e) => Err(e.into()),
-                    },
-                    None => Ok(vec![]), // Detached HEAD, return empty vec
-                }
-            }
-            Err(_) => Ok(vec![]), // No HEAD, return empty vec
+            Ok(head) => match head.target() {
+                Some(oid) => match self.bare.find_commit(oid) {
+                    Ok(commit) => Ok(vec![commit]),
+                    Err(e) => Err(e.into()),
+                },
+                None => Ok(vec![]),
+            },
+            Err(_) => Ok(vec![]),
         }
     }
 
