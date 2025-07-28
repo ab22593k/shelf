@@ -5,46 +5,46 @@ use colored::Colorize;
 use git2::{DiffOptions, Repository};
 use indicatif::{ProgressBar, ProgressStyle};
 
-use crate::dotfs::DotFsError;
+use crate::error::AppError;
 
-pub async fn run_with_progress<F, Fut, T>(op: F) -> Result<T>
+pub async fn spin_progress<Op, Fut, Res>(operation: Op) -> Result<Res>
 where
-    F: FnOnce() -> Fut,
-    Fut: Future<Output = Result<T>>,
+    Op: FnOnce() -> Fut,
+    Fut: Future<Output = Result<Res>>,
 {
-    let spinner = ProgressBar::new_spinner();
-    spinner.set_style(
+    let progress_wheel = ProgressBar::new_spinner();
+    progress_wheel.set_style(
         ProgressStyle::default_spinner()
             .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈")
-            .template("{spinner} Generating commit message...")?,
+            .template("{spinner} Forging commit narrative...")?,
     );
-    spinner.enable_steady_tick(Duration::from_millis(120));
+    progress_wheel.enable_steady_tick(Duration::from_millis(120));
 
-    let result = op().await?;
-    spinner.finish_and_clear();
-    Ok(result)
+    let outcome = operation().await?;
+    progress_wheel.finish_and_clear();
+    Ok(outcome)
 }
 
-/// Prints a styled success message.
-pub fn print_success(message: &str) {
-    println!("{} {}", "✓".bright_green(), message.bold().green());
+/// Illuminates a successful outcome.
+pub fn shine_success(sparkle: &str) {
+    println!("{} {}", "✓".bright_green(), sparkle.bold().green());
 }
 
-pub fn check_git_installation() -> Result<bool> {
-    which::which("git").map_err(|_| DotFsError::GitNotInstalled)?;
-    Ok(true)
+pub fn verify_git_presence() -> Result<(), AppError> {
+    which::which("git").map_err(|_| AppError::GitNotInstalled)?;
+    Ok(())
 }
 
-pub fn get_staged_diff() -> Result<String> {
-    let repo = Repository::open(Path::new(".")).context("Opening git repository failed")?;
-    let diff = generate_diff(&repo)?;
+pub fn harvest_staged_changes() -> Result<String> {
+    let forge = Repository::open(Path::new(".")).context("Anvil forging failed")?;
+    let raw_difference = sculpt_difference(&forge)?;
 
-    format_diff(&diff)
+    shape_difference(&raw_difference)
 }
 
-fn generate_diff(repo: &Repository) -> Result<git2::Diff<'_>> {
-    let mut diff_opts = DiffOptions::new();
-    diff_opts
+fn sculpt_difference(forge: &Repository) -> Result<git2::Diff<'_>> {
+    let mut diff_specs = DiffOptions::new();
+    diff_specs
         .context_lines(4)
         .minimal(true)
         .patience(true)
@@ -54,48 +54,56 @@ fn generate_diff(repo: &Repository) -> Result<git2::Diff<'_>> {
         .ignore_whitespace_change(true)
         .ignore_whitespace_eol(true);
 
-    // Get head tree and index tree
-    let head_tree = match repo.head() {
-        Ok(head) => head.peel_to_tree().context("Getting HEAD tree failed")?,
+    // Gather temporal states
+    let crest_state = match forge.head() {
+        Ok(crest) => crest
+            .peel_to_tree()
+            .context("Crest state retrieval failed")?,
         Err(_) => {
-            // Handle first commit case where HEAD doesn't exist yet
+            // Handle the genesis commit scenario where HEAD is nascent
 
-            repo.find_tree(repo.treebuilder(None)?.write()?)?
+            forge.find_tree(forge.treebuilder(None)?.write()?)?
         }
     };
 
-    let index_tree = repo
+    let crucible_state = forge
         .index()
-        .context("Getting repo index failed")?
+        .context("Crucible access failed")?
         .write_tree()
-        .context("Writing index tree failed")?;
-    let index_tree = repo
-        .find_tree(index_tree)
-        .context("Finding index tree failed")?;
+        .context("Crucible state writing failed")?;
+    let crucible_state = forge
+        .find_tree(crucible_state)
+        .context("Crucible state lookup failed")?;
 
-    // Generate diff between head and index trees
-    repo.diff_tree_to_tree(Some(&head_tree), Some(&index_tree), Some(&mut diff_opts))
-        .context("Generating diff failed")
+    // Forge differences between crest and crucible states
+    forge
+        .diff_tree_to_tree(
+            Some(&crest_state),
+            Some(&crucible_state),
+            Some(&mut diff_specs),
+        )
+        .context("Difference forging failed")
 }
 
-fn format_diff(diff: &git2::Diff) -> Result<String> {
-    let mut diff_text = String::new();
-    diff.print(git2::DiffFormat::Patch, |_delta, _hunk, line| {
-        if let Ok(text) = std::str::from_utf8(line.content()) {
-            match line.origin() {
-                '+' => diff_text.push('+'),
-                '-' => diff_text.push('-'),
-                '=' => diff_text.push('='),
-                _ => {}
+fn shape_difference(difference: &git2::Diff) -> Result<String> {
+    let mut woven_difference = String::new();
+    difference
+        .print(git2::DiffFormat::Patch, |_artifact, _stanza, line| {
+            if let Ok(thread) = std::str::from_utf8(line.content()) {
+                match line.origin() {
+                    '+' => woven_difference.push('+'),
+                    '-' => woven_difference.push('-'),
+                    '=' => woven_difference.push('='),
+                    _ => {}
+                }
+
+                woven_difference.push_str(thread);
+                true
+            } else {
+                false
             }
+        })
+        .context("Difference shaping failed")?;
 
-            diff_text.push_str(text);
-            true
-        } else {
-            false
-        }
-    })
-    .context("Formatting diff failed")?;
-
-    Ok(diff_text)
+    Ok(woven_difference)
 }

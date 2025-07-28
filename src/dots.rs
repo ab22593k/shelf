@@ -1,88 +1,47 @@
-use std::{
-    io,
-    path::{self, Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow};
 use git2::{Index, Repository, Statuses};
-use thiserror::Error;
 use tracing::debug;
 
-use crate::utils::{check_git_installation, print_success};
-
-const SHELF_BARE_NAME: &str = ".shelf";
-
-/// Initializes the DotFs repository in the user's home directory.
-pub fn init_dotfs_repo() -> Result<Repository> {
-    check_git_installation().expect("Git must be installed");
-
-    let work_tree = std::env::var("HOME")
-        .map(PathBuf::from)
-        .map_err(|_| DotFsError::HomeDirectoryNotFound)?
-        .canonicalize()?;
-    let git_dir = work_tree.join(SHELF_BARE_NAME);
-
-    let repo = match Repository::open_bare(&git_dir) {
-        Ok(repo) => repo,
-        Err(_) => Repository::init_bare(&git_dir)?,
-    };
-    repo.set_workdir(&work_tree, false)?;
-    Ok(repo)
-}
-
-#[derive(Error, Debug)]
-pub enum DotFsError {
-    #[error("Home directory not found")]
-    HomeDirectoryNotFound,
-    #[error("Path not found: {0:?}")]
-    PathNotFound(PathBuf),
-    #[error("Path is outside work tree: {0:?}")]
-    OutsideWorkTree(PathBuf),
-    #[error("Invalid UTF-8 in path")]
-    InvalidUtf8Path,
-    #[error("Git error: {0}")]
-    Git(#[from] git2::Error),
-    #[error("IO error: {0}")]
-    Io(#[from] io::Error),
-    #[error("Path strip error: {0}")]
-    StripPrefix(#[from] path::StripPrefixError),
-    #[error("Git executable is not installed")]
-    GitNotInstalled,
-}
+use crate::{
+    error::AppError,
+    utils::{shine_success, verify_git_presence},
+};
 
 /// Manages system configuration files using a bare Git repository in the user's home directory.
-pub struct DotFs {
+pub struct Dots {
     bare: Repository,
     filter: ListFilter,
     filtered_entries: Vec<PathBuf>, // Pre-collected entries for iteration
     iter_index: usize,              // Tracks iteration progress
 }
 
-impl Default for DotFs {
-    fn default() -> Self {
-        match init_dotfs_repo() {
-            Ok(bare) => Self {
-                bare,
-                filter: ListFilter::All, // Default filter
-                filtered_entries: Vec::new(),
-                iter_index: 0,
-            },
-            Err(e) => panic!("Failed to initialize DotFs repository: {e}"),
-        }
-    }
-}
+impl Dots {
+    pub fn new(git_dir: PathBuf, work_tree: PathBuf) -> Result<Self> {
+        verify_git_presence()?;
 
-impl DotFs {
+        let repo = match Repository::open_bare(&git_dir) {
+            Ok(repo) => repo,
+            Err(_) => Repository::init_bare(&git_dir)?,
+        };
+        repo.set_workdir(&work_tree, false)?;
+
+        Ok(Self {
+            bare: repo,
+            filter: ListFilter::All,
+            filtered_entries: Vec::new(),
+            iter_index: 0,
+        })
+    }
+
     /// Generic helper for operations that involve iterating over paths, validating, and modifying the index.
-    fn apply_to_paths<F>(
+    fn apply_to_paths<F: Fn(&Dots, &Path, &mut Index) -> Result<()>>(
         &mut self,
         paths: &[PathBuf],
         action: F,
         success_message: &str,
-    ) -> Result<()>
-    where
-        F: Fn(&DotFs, &Path, &mut Index) -> Result<()>,
-    {
+    ) -> Result<()> {
         let mut index = self.get_index()?;
 
         for path in paths {
@@ -91,7 +50,7 @@ impl DotFs {
         }
 
         self.write_index(&mut index)?;
-        print_success(success_message);
+        shine_success(success_message);
         Ok(())
     }
 
@@ -189,7 +148,7 @@ impl DotFs {
     /// # Returns
     ///
     /// * `Ok(remote_name)` if the remote was added successfully
-    /// * `Err(DotFsError::Git)` if there was an error creating the remote
+    /// * `Err(AppError::Git)` if there was an error creating the remote
     pub fn add_remote(&mut self, name: impl AsRef<str>, url: impl AsRef<str>) -> Result<String> {
         let remote_name = name.as_ref().to_string();
         let remote_url = url.as_ref();
@@ -224,7 +183,7 @@ impl DotFs {
 
     /// Tries to authenticate using SSH keys found at common locations.
     fn try_ssh_key_auth(username_from_url: Option<&str>) -> Result<git2::Cred, git2::Error> {
-        let ssh_key_paths = DotFs::get_ssh_key_paths(username_from_url);
+        let ssh_key_paths = Dots::get_ssh_key_paths(username_from_url);
 
         for key_path in ssh_key_paths {
             if let Ok(cred) = git2::Cred::ssh_key(
@@ -254,13 +213,13 @@ impl DotFs {
     }
 
     /// Provides Git credential callbacks for push operations.
-    fn get_auth_credentials(&self) -> git2::RemoteCallbacks<'static> {
+    fn get_auth_credentials(&self) -> git2::RemoteCallbacks<'_> {
         let mut callbacks = git2::RemoteCallbacks::new();
         callbacks.credentials(|_url, username_from_url, allowed_types| {
             if allowed_types.contains(git2::CredentialType::SSH_KEY) {
-                DotFs::try_ssh_key_auth(username_from_url)
+                Dots::try_ssh_key_auth(username_from_url)
             } else if allowed_types.contains(git2::CredentialType::USER_PASS_PLAINTEXT) {
-                DotFs::try_env_var_auth()
+                Dots::try_env_var_auth()
             } else {
                 Err(git2::Error::from_str("No supported authentication methods found. Configure SSH keys or set Git credentials in environment variables"))
             }
@@ -278,7 +237,7 @@ impl DotFs {
     /// # Returns
     ///
     /// * `Ok(())` if the push was successful
-    /// * `Err(DotFsError::Git)` if there was an error during push
+    /// * `Err(AppError::Git)` if there was an error during push
     pub fn push(&self, remote: impl AsRef<str>, branch: impl AsRef<str>) -> Result<()> {
         let remote_name = remote.as_ref();
         let branch_name = branch.as_ref();
@@ -308,8 +267,8 @@ impl DotFs {
     }
 
     /// Converts a git2::IndexEntry path to a PathBuf relative to the workdir.
-    fn index_entry_to_pathbuf(&self, entry: &git2::IndexEntry) -> Result<PathBuf> {
-        let path_str = std::str::from_utf8(&entry.path).map_err(|_| DotFsError::InvalidUtf8Path)?;
+    fn index_entry_to_pathbuf(&self, entry: &git2::IndexEntry) -> Result<PathBuf, AppError> {
+        let path_str = std::str::from_utf8(&entry.path).map_err(|_| AppError::InvalidUtf8Path)?;
         Ok(self.workdir()?.join(path_str))
     }
 
@@ -380,10 +339,10 @@ impl DotFs {
     /// Validates a path before operations.
     fn validate_path(&self, path: &Path) -> Result<()> {
         if !path.exists() {
-            return Err(DotFsError::PathNotFound(path.to_path_buf()).into());
+            return Err(AppError::PathNotFound(path.to_path_buf()).into());
         }
         if !path.starts_with(self.workdir()?) {
-            return Err(DotFsError::OutsideWorkTree(path.to_path_buf()).into());
+            return Err(AppError::OutsideWorkTree(path.to_path_buf()).into());
         }
         Ok(())
     }
@@ -418,24 +377,22 @@ impl DotFs {
 
     /// Retrieves the repository index.
     fn get_index(&self) -> Result<Index> {
-        Ok(self.bare.index().map_err(DotFsError::Git)?)
+        Ok(self.bare.index().map_err(AppError::Git)?)
     }
 
     /// Writes the index to disk.
     fn write_index(&self, index: &mut Index) -> Result<()> {
-        index.write().map_err(DotFsError::Git)?;
+        index.write().map_err(AppError::Git)?;
         Ok(())
     }
 
     /// Gets the working directory of the repository.
-    fn workdir(&self) -> Result<&Path> {
-        self.bare
-            .workdir()
-            .ok_or(DotFsError::GitNotInstalled.into())
+    fn workdir(&self) -> Result<&Path, AppError> {
+        self.bare.workdir().ok_or(AppError::GitNotInstalled)
     }
 
     /// Computes the relative path from the working directory.
-    fn get_relative_path<'a>(&self, path: &'a Path) -> Result<&'a Path> {
+    fn get_relative_path<'a>(&self, path: &'a Path) -> Result<&'a Path, AppError> {
         Ok(path.strip_prefix(self.workdir()?)?)
     }
 
@@ -476,7 +433,7 @@ impl DotFs {
     }
 }
 
-impl Iterator for DotFs {
+impl Iterator for Dots {
     type Item = PathBuf;
 
     /// Returns the next file path matching the current filter, or `None` if exhausted.
@@ -514,8 +471,10 @@ mod tests {
     use tempfile::tempdir;
     use tracing::debug;
 
+    const SHELF_BARE_NAME: &str = ".shelf";
+
     struct TestEnv {
-        manager: DotFs,
+        manager: Dots,
         _temp: tempfile::TempDir,
     }
 
@@ -538,8 +497,8 @@ mod tests {
             config.set_str("user.name", "Test User")?;
             config.set_str("user.email", "test@example.com")?;
 
-            // Create DotFs with the isolated repository
-            let manager = DotFs {
+            // Create RepositoryManager with the isolated repository
+            let manager = Dots {
                 bare: repo,
                 filter: ListFilter::All,
                 filtered_entries: Vec::new(),
@@ -601,20 +560,6 @@ mod tests {
             .try_init();
     }
 
-    impl DotFsError {
-        pub fn is_git_not_installed(&self) -> bool {
-            matches!(self, Self::GitNotInstalled)
-        }
-
-        pub fn is_path_not_found(&self) -> bool {
-            matches!(self, Self::PathNotFound(_))
-        }
-
-        pub fn is_outside_work_tree(&self) -> bool {
-            matches!(self, Self::OutsideWorkTree(_))
-        }
-    }
-
     #[test]
     fn git_installation_detection() -> Result<()> {
         debug!("Testing git installation detection");
@@ -622,14 +567,13 @@ mod tests {
 
         // SAFETY: Test environment should run without concurrent access
         unsafe { env::set_var("PATH", "") }
-        let err = check_git_installation().unwrap_err();
-        let tabs_err = err.downcast_ref::<DotFsError>().unwrap();
-        assert!(tabs_err.is_git_not_installed());
+        let err = verify_git_presence().unwrap_err();
+        assert!(matches!(err, AppError::GitNotInstalled));
 
         // SAFETY: Test environment should run without concurrent access
         // Restoring original PATH value
         unsafe { env::set_var("PATH", original_path.unwrap_or_default()) }
-        assert!(check_git_installation().is_ok());
+        assert!(verify_git_presence().is_ok());
 
         Ok(())
     }
@@ -689,8 +633,10 @@ mod tests {
         // Non-existent path
         let missing = env.workdir().join("ghost.txt");
         let err = env.manager.track(&[missing]).unwrap_err();
-        let tabs_err = err.downcast_ref::<DotFsError>().unwrap();
-        assert!(tabs_err.is_path_not_found());
+        assert!(matches!(
+            err.downcast_ref::<AppError>(),
+            Some(AppError::PathNotFound(_))
+        ));
 
         // External path
         let external = if cfg!(windows) {
@@ -699,8 +645,10 @@ mod tests {
             PathBuf::from("/etc/passwd")
         };
         let err = env.manager.track(&[external]).unwrap_err();
-        let tabs_err = err.downcast_ref::<DotFsError>().unwrap();
-        assert!(tabs_err.is_outside_work_tree());
+        assert!(matches!(
+            err.downcast_ref::<AppError>(),
+            Some(AppError::OutsideWorkTree(_))
+        ));
 
         Ok(())
     }

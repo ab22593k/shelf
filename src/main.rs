@@ -1,13 +1,14 @@
-mod commit;
-mod review;
-mod shell;
-mod utils;
-
 pub mod app;
-pub mod dotfs;
+pub mod commit;
+pub mod config;
+pub mod dots;
+pub mod error;
+pub mod review;
+pub mod shell;
+pub mod utils;
 
 use crate::app::{Shelf, run_app};
-use crate::dotfs::DotFs;
+use crate::config::init_dots_repo;
 use anyhow::Result;
 use clap::Parser;
 use colored::Colorize;
@@ -17,7 +18,7 @@ use tracing::level_filters::LevelFilter;
 
 #[cfg(debug_assertions)]
 async fn initialize_tracing() {
-    let level = match env::var("RUST_LOG")
+    let trace_granularity = match env::var("RUST_LOG")
         .unwrap_or_else(|_| "off".to_string())
         .to_lowercase()
         .as_str()
@@ -30,8 +31,8 @@ async fn initialize_tracing() {
         _ => LevelFilter::OFF,
     };
 
-    if let Err(e) = tracing_subscriber::fmt()
-        .with_max_level(level)
+    if let Err(tracing_blip) = tracing_subscriber::fmt()
+        .with_max_level(trace_granularity)
         .with_target(false)
         .with_file(true)
         .with_line_number(true)
@@ -39,7 +40,10 @@ async fn initialize_tracing() {
         .pretty()
         .try_init()
     {
-        eprintln!("Failed to initialize tracing: {}", e.to_string().red());
+        eprintln!(
+            "Failed to initialize tracing: {}",
+            tracing_blip.to_string().red()
+        );
     }
 }
 
@@ -50,11 +54,11 @@ async fn main() -> Result<()> {
 
     colored::control::set_override(true);
 
-    let cli = Shelf::parse();
-    let dotfs = DotFs::default();
+    let user_directive = Shelf::parse();
+    let config_nexus = init_dots_repo()?;
 
-    if let Err(err) = run_app(cli, dotfs).await {
-        eprintln!("Error: {}", err.to_string().red());
+    if let Err(operation_fizzle) = run_app(user_directive, config_nexus).await {
+        eprintln!("Error: {}", operation_fizzle.to_string().red());
         process::exit(1);
     }
     Ok(())

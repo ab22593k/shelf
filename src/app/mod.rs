@@ -20,13 +20,13 @@ use tempfile::NamedTempFile;
 use tracing::debug;
 
 use crate::{
-    commit::commit_completion,
-    dotfs::{DotFs, ListFilter},
-    shell::completions_script,
+    commit::conjure_commit_suggestion,
+    dots::{Dots, ListFilter},
+    shell::conjure_completions,
 };
 use crate::{
     review::Reviewer,
-    utils::{get_staged_diff, run_with_progress},
+    utils::{harvest_staged_changes, spin_progress},
 };
 
 #[derive(Parser)]
@@ -40,7 +40,7 @@ pub struct Shelf {
 #[derive(Subcommand)]
 pub enum Commands {
     /// Manage system configuration files.
-    Dotfs {
+    Dots {
         #[command(subcommand)]
         action: FileAction,
     },
@@ -95,11 +95,34 @@ pub enum FileAction {
     Save,
 }
 
-pub async fn run_app(cli: Shelf, repo: DotFs) -> Result<()> {
+pub async fn run_app(cli: Shelf, mut repo: Dots) -> Result<()> {
     match &cli.command {
-        Commands::Dotfs { action } => {
-            handle_dotfs_command(action, repo).await?;
-        }
+        Commands::Dots { action } => match action {
+            FileAction::Track { paths } => {
+                repo.track(paths)?;
+                for path in paths {
+                    println!("Tracking {}", path.display().to_string().bright_green());
+                }
+            }
+            FileAction::Untrack { paths } => {
+                repo.untrack(paths)?;
+                for path in paths {
+                    println!("Untracking {}", path.display().to_string().bright_red());
+                }
+            }
+            FileAction::List { dirty } => {
+                if *dirty {
+                    repo.set_filter(ListFilter::Modified);
+                }
+                let paths = repo.collect::<Vec<_>>();
+                let paths_by_dir = group_tabs_by_directory(paths);
+                print_grouped_paths(&paths_by_dir);
+            }
+            FileAction::Save => {
+                repo.save_local_changes()?;
+                println!("{}", "DotFs saved successfully".bright_green());
+            }
+        },
         Commands::Commit {
             prefix,
             model,
@@ -115,70 +138,10 @@ pub async fn run_app(cli: Shelf, repo: DotFs) -> Result<()> {
         Commands::Completion { shell } => {
             let mut cmd = Shelf::command();
             let script =
-                completions_script(*shell, &mut cmd).context("Printing completions failed")?;
+                conjure_completions(*shell, &mut cmd).context("Printing completions failed")?;
             println!("{script}");
         }
     }
-    Ok(())
-}
-
-async fn handle_dotfs_command(action: &FileAction, mut repo: DotFs) -> Result<()> {
-    match action {
-        FileAction::Track { paths } => tracking_handler(paths, &mut repo)?,
-        FileAction::Untrack { paths } => untracking_handler(paths, &mut repo)?,
-        FileAction::List { dirty } => display_files(repo, *dirty)?,
-        FileAction::Save => saving_handler(&mut repo).await?,
-    }
-    Ok(())
-}
-
-async fn saving_handler(repo: &mut DotFs) -> Result<()> {
-    // Save changes locally
-    repo.save_local_changes()
-        .context("Failed to save dotfs changes")?;
-
-    print_success_message("DotFs saved successfully");
-
-    Ok(())
-}
-
-fn print_path_status(path: &Path, action: &str, is_success: bool) {
-    let colored_display = if is_success {
-        path.display().to_string().bright_green()
-    } else {
-        path.display().to_string().bright_red()
-    };
-    println!("{action} {colored_display}");
-}
-
-fn tracking_handler(paths: &[PathBuf], repo: &mut DotFs) -> Result<()> {
-    repo.track(paths).context("Tracking files failed")?;
-    for path in paths {
-        print_path_status(path, "Tracking", true);
-    }
-    Ok(())
-}
-
-fn untracking_handler(paths: &[PathBuf], repo: &mut DotFs) -> Result<()> {
-    repo.untrack(paths).context("Untracking files failed")?;
-    for path in paths {
-        print_path_status(path, "Untracking", false);
-    }
-    Ok(())
-}
-
-fn display_files(mut repo: DotFs, dirty: bool) -> Result<()> {
-    debug!("Displaying files with dirty: {}", dirty);
-    let paths = match dirty {
-        true => {
-            repo.set_filter(ListFilter::Modified);
-            repo.collect()
-        }
-        false => repo.collect(),
-    };
-    let paths_by_dir = group_tabs_by_directory(paths);
-
-    print_grouped_paths(&paths_by_dir);
     Ok(())
 }
 
@@ -205,52 +168,71 @@ fn display_path_relative_to_home<'a>(path: &'a Path, home: &'a Path) -> Cow<'a, 
         .map_or_else(|_| Cow::Borrowed(path), Cow::Borrowed)
 }
 
-fn print_directory_header(index: usize, total_dirs: usize, dir_path: &Path, home_dir: &Path) {
-    let display_path = display_path_relative_to_home(dir_path, home_dir);
-    let prefix = if index == total_dirs - 1 {
-        "└── "
-    } else {
-        "├── "
-    };
-    println!(
-        "{}{}{}{}",
-        prefix.blue().bold(),
-        "📁 ".blue().bold(),
-        display_path.display().to_string().blue().bold(),
-        ":".blue().bold()
-    );
-}
-
-fn print_file_entry(index: usize, total_files: usize, file_path: &Path, home_dir: &Path) {
-    let display_path = display_path_relative_to_home(file_path, home_dir);
-    let file_type = if file_path.is_dir() { "📁" } else { "" };
-    let prefix = if index == total_files - 1 {
-        "    └── "
-    } else {
-        "    ├── "
-    };
-    println!(
-        "{}{} {}",
-        prefix.bright_green(),
-        file_type.bright_green(),
-        display_path.display()
-    );
-}
-
 fn print_grouped_paths(paths_by_dir: &collections::BTreeMap<PathBuf, Vec<PathBuf>>) {
     let home = get_home_dir();
-    let total_dirs = paths_by_dir.len();
 
-    for (i, (dir, files)) in paths_by_dir.iter().enumerate() {
-        debug!("Processing directory: {:?} with {} files", dir, files.len());
-        if !dir.as_os_str().is_empty() {
-            print_directory_header(i, total_dirs, dir, &home);
-        }
+    // Determine max widths for columns based on uncolored strings
+    let mut max_dir_len = "DIRECTORY".len();
+    let mut max_item_len = "ITEM".len();
 
-        let total_files = files.len();
-        for (j, file) in files.iter().enumerate() {
-            print_file_entry(j, total_files, file, &home);
+    // Collect all rows as plain strings first to calculate accurate column widths
+    let mut rows: Vec<(String, String, String)> = Vec::new();
+
+    for (dir, files) in paths_by_dir.iter() {
+        let display_dir_cow = display_path_relative_to_home(dir, &home);
+        let display_dir_str = if display_dir_cow.as_os_str().is_empty() {
+            ".".to_string() // Represent root/empty path as '.' for display
+        } else {
+            display_dir_cow.display().to_string()
+        };
+        max_dir_len = max_dir_len.max(display_dir_str.len());
+
+        for file in files {
+            let item_name_cow = file.file_name().unwrap_or_default().to_string_lossy();
+            let item_name_str = item_name_cow.to_string();
+            max_item_len = max_item_len.max(item_name_str.len());
+
+            let item_type = if file.is_dir() { "Dir" } else { "File" };
+            rows.push((
+                display_dir_str.clone(),
+                item_name_str,
+                item_type.to_string(),
+            ));
         }
+    }
+
+    // Print Headers
+    println!(
+        "{:<width_dir$} {:<width_item$} {:<4}",
+        "DIRECTORY".bold().underline(),
+        "ITEM".bold().underline(),
+        "TYPE".bold().underline(),
+        width_dir = max_dir_len,
+        width_item = max_item_len,
+    );
+    println!(
+        "{:-<width_dir$} {:-<width_item$} {:-<4}",
+        "",
+        "",
+        "",
+        width_dir = max_dir_len,
+        width_item = max_item_len,
+    );
+
+    // Print Data Rows
+    for (dir_str, item_name, item_type) in rows {
+        // Pad the string first to the determined width, then apply color.
+        // This ensures padding is based on visual length, not byte length including ANSI escape codes.
+        let padded_dir = format!("{: <width_dir$}", dir_str, width_dir = max_dir_len);
+        let padded_item = format!("{: <width_item$}", item_name, width_item = max_item_len);
+        let padded_type = format!("{: <4}", item_type); // Type column is fixed width for "File" or "Dir"
+
+        println!(
+            "{} {} {}",
+            padded_dir.blue().bold(),
+            padded_item.bright_green(),
+            padded_type.cyan(),
+        );
     }
 }
 
@@ -260,7 +242,7 @@ async fn generate_commit_message(
     history: &usize,
     ignored: &Option<Vec<String>>,
 ) -> Result<String> {
-    let response = commit_completion(prefix, model, history, ignored).await?;
+    let response = conjure_commit_suggestion(prefix, model, history, ignored).await?;
 
     // If the response is a Gemini JSON structure, extract the commit message; otherwise, use the plain string
     let commit_msg = if let Ok(parsed) =
@@ -418,16 +400,16 @@ fn create_git_commit(msg: String) -> Result<String> {
         parents.iter().collect::<Vec<_>>().as_slice(),
     )?;
 
-    print_success_message("Created git commit successfully");
+    println!("{}", "Created git commit successfully".bright_green());
     Ok(msg)
 }
 
 async fn handle_review_action(model: &str) -> Result<String> {
     let agent = gemini::Client::from_env();
 
-    let diff = get_staged_diff().context("Getting staged changes failed")?;
+    let diff = harvest_staged_changes().context("Getting staged changes failed")?;
 
-    let msg = run_with_progress(|| async {
+    let msg = spin_progress(|| async {
         let reviewer = Reviewer::new(agent.completion_model(model)).with_diff(&diff);
 
         reviewer.review().await.map_err(|e| anyhow!(e))
@@ -435,8 +417,4 @@ async fn handle_review_action(model: &str) -> Result<String> {
     .await?;
 
     Ok(msg)
-}
-
-fn print_success_message(msg: &str) {
-    println!("{}", msg.bright_green());
 }

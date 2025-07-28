@@ -9,7 +9,7 @@ use rig::{
     providers::gemini,
 };
 
-use crate::utils::get_staged_diff;
+use crate::utils::harvest_staged_changes;
 
 const PREAMBLE: &str = r#"You are an expert software developer assistant specialized in crafting clear, concise, informative, and contextually relevant Git commit messages. Your primary task is to **complete a given partial commit message**. You will be provided with a summary of the current code changes and relevant past commit history to help you understand the context and maintain a consistent style and 'personal' nature.
 
@@ -31,33 +31,35 @@ The goal is to produce high-quality, complete commit messages that effectively t
 **PARTIAL_COMMIT_MESSAGE:** refactor: Rename old_auth_method to new_
 **COMPLETED_COMMIT_MESSAGE:** refactor: Rename old_auth_method to new_secure_auth_method for enhanced security and clarity"#;
 
-/// Generates a commit message using an AI model.
+/// Conjures commit suggestions from the ether.
 ///
-/// This function uses `rig`'s `Agent` to generate a commit message based on the staged git diff,
-/// recent commit history, and an optional user-provided prefix.
+/// This function leverages `rig`'s `Agent` to manifest a commit message by
+/// synthesizing staged git diffs, recent commit lore, and an optional user-crafted prefix.
 ///
 /// # Arguments
-/// * `prefix` - An optional prefix for the commit message.
-/// * `model` - The name of the AI model to use.
-/// * `history_depth` - The number of recent commits to include as context.
-/// * `ignored` - A list of file patterns to ignore from commit history.
-pub async fn commit_completion(
-    prefix: &str,
-    model: &str,
-    history_depth: &usize,
-    ignored: &Option<Vec<String>>,
+/// * `commit_prefix` - An optional precursor to the commit message.
+/// * `ai_model` - The moniker of the AI model to invoke.
+/// * `history_span` - The number of recent commits to weave into the narrative.
+/// * `excluded_files` - A list of file patterns to shroud from the commit history.
+pub async fn conjure_commit_suggestion(
+    commit_prefix: &str,
+    ai_model: &str,
+    history_span: &usize,
+    excluded_files: &Option<Vec<String>>,
 ) -> Result<String> {
-    let diff = get_staged_diff().context("Getting staged changes failed")?;
+    let diff = harvest_staged_changes().context("Conjuring staged changes failed")?;
     if diff.trim().is_empty() {
-        return Err(anyhow!("Cannot generate commit message from empty diff"));
+        return Err(anyhow!(
+            "Cannot conjure a commit message from an empty diff"
+        ));
     }
 
-    let ignored_patterns: Option<Vec<&str>> = ignored
+    let ignored_patterns: Option<Vec<&str>> = excluded_files
         .as_ref()
         .map(|v| v.iter().map(|s| s.as_str()).collect());
-    let history = get_recent_commits(history_depth, ignored_patterns.as_deref())?;
+    let commit_chronicle = fetch_commit_saga(history_span, ignored_patterns.as_deref())?;
 
-    let history_context = history
+    let history_tapestry = commit_chronicle
         .iter()
         .map(|(oid, message)| {
             format!(
@@ -70,49 +72,52 @@ pub async fn commit_completion(
         .join("\n");
 
     let client = gemini::Client::from_env();
-    let completion_model = client.completion_model(model);
+    let muse_model = client.completion_model(ai_model);
 
-    let input_prompt = format!(
-        "CODE_CHANGES:\n```diff\n{diff}\n```\n\nCOMMIT_HISTORY:\n{history_context}\n\nPARTIAL_COMMIT_MESSAGE: {prefix}",
+    let prompt_essence = format!(
+        "CODE_CHANGES:\n```diff\n{diff}\n```\n\nCOMMIT_HISTORY:\n{history_tapestry}\n\nPARTIAL_COMMIT_MESSAGE: {commit_prefix}",
     );
 
-    let agent = AgentBuilder::new(completion_model)
+    let artificer = AgentBuilder::new(muse_model)
         .preamble(PREAMBLE)
         .temperature(0.2)
         .max_tokens(200)
         .build();
 
-    let response = agent.prompt(input_prompt).await?;
+    let revelation = artificer.prompt(prompt_essence).await?;
 
-    Ok(response)
+    Ok(revelation)
 }
 
-/// Retrieves the last N commits from the repository, optionally ignoring commits that match patterns.
-pub fn get_recent_commits(
-    history_depth: &usize,
-    ignore_patterns: Option<&[&str]>,
+/// Fetches the last N commits from the repository, optionally evading commits matching patterns.
+pub fn fetch_commit_saga(
+    saga_depth: &usize,
+    evade_patterns: Option<&[&str]>,
 ) -> Result<Vec<(Oid, String)>> {
-    let repo = Repository::open(Path::new(".")).context("Opening git repository failed")?;
-    let head_commit = repo
+    let repository =
+        Repository::open(Path::new(".")).context("Unearthing git repository failed")?;
+    let apex_commit = repository
         .head()
-        .context("Getting repository HEAD failed")?
+        .context("Seeking repository HEAD failed")?
         .peel_to_commit()
-        .context("Getting HEAD commit failed")?;
-    let mut revwalk = repo.revwalk().context("Creating revision walker failed")?;
-    revwalk
-        .push(head_commit.id())
-        .context("Setting starting commit failed")?;
-    revwalk
+        .context("Seeking HEAD commit failed")?;
+    let mut chronicle_walker = repository
+        .revwalk()
+        .context("Weaving revision chronicle failed")?;
+    chronicle_walker
+        .push(apex_commit.id())
+        .context("Anchoring starting commit failed")?;
+    chronicle_walker
         .set_sorting(git2::Sort::TIME)
-        .context("Setting sort order failed")?;
+        .context("Setting chronicle order failed")?;
 
-    let mut commits = Vec::new();
-    for id in revwalk.take(*history_depth) {
-        match id {
-            Ok(oid) => match repo.find_commit(oid) {
+    let mut saga_chapters = Vec::new();
+    for commit_id in chronicle_walker.take(*saga_depth) {
+        match commit_id {
+            Ok(oid) => match repository.find_commit(oid) {
                 Ok(commit) => {
-                    if !should_ignore_commit(&commit, ignore_patterns) {
-                        commits.push((oid, commit.message().unwrap_or_default().to_string()));
+                    if !should_shun_commit(&commit, evade_patterns) {
+                        saga_chapters.push((oid, commit.message().unwrap_or_default().to_string()));
                     }
                 }
                 Err(err) => {
@@ -124,14 +129,14 @@ pub fn get_recent_commits(
             }
         }
     }
-    Ok(commits)
+    Ok(saga_chapters)
 }
 
-/// Determines if a commit should be ignored based on file patterns.
-fn should_ignore_commit(commit: &Commit, ignore_patterns: Option<&[&str]>) -> bool {
-    if let (Some(patterns), Ok(tree)) = (ignore_patterns, commit.tree()) {
+/// Ascertains if a commit should be shunned based on file patterns.
+fn should_shun_commit(commit: &Commit, evade_patterns: Option<&[&str]>) -> bool {
+    if let (Some(patterns), Ok(file_tree)) = (evade_patterns, commit.tree()) {
         for pattern in patterns {
-            if tree.iter().any(|entry| {
+            if file_tree.iter().any(|entry| {
                 entry
                     .name()
                     .map(|name| name.contains(pattern))

@@ -22,27 +22,27 @@ More providers will be added in future releases.
 
 Track files:
 ```bash
-shelf dotfs track ~/.bashrc
+shelf dots track ~/.bashrc
 ```
 
 List tracked files:
 ```bash
-shelf dotfs list
+shelf dots list
 ```
 
 List only modified files:
 ```bash
-shelf dotfs list --dirty
+shelf dots list --dirty
 ```
 
 Untrack files:
 ```bash
-shelf dotfs untrack ~/.bashrc
+shelf dots untrack ~/.bashrc
 ```
 
 Save current changes:
 ```bash
-shelf dotfs save
+shelf dots save
 ```
 
 ### AI-Powered Git Commands
