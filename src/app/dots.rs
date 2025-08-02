@@ -1,13 +1,166 @@
+use anyhow::Result;
+use clap::{Args, Subcommand};
+use colored::Colorize;
 use std::path::{Path, PathBuf};
-
-use anyhow::{Result, anyhow};
-use git2::{Index, Repository, Statuses};
+use std::{borrow::Cow, collections};
 use tracing::debug;
+
+use anyhow::anyhow;
+use git2::{Index, Repository, Statuses};
 
 use crate::{
     error::ShelfError,
     utils::{shine_success, verify_git_presence},
 };
+
+#[derive(Args)]
+pub struct DotsCommand {
+    #[command(subcommand)]
+    action: FileAction,
+}
+
+#[derive(Subcommand)]
+pub enum FileAction {
+    /// Track files for management.
+    Track {
+        /// Paths to the files to track.
+        paths: Vec<PathBuf>,
+    },
+    /// Remove files from management.
+    Untrack {
+        /// Paths to the files to untrack.
+        paths: Vec<PathBuf>,
+    },
+    /// List all currently tracked files.
+    List {
+        /// List only modified files.
+        #[arg(short, long)]
+        dirty: bool,
+    },
+    /// Save files for management.
+    Save,
+}
+
+pub async fn run(args: DotsCommand, mut repo: Dots) -> Result<()> {
+    match args.action {
+        FileAction::Track { paths } => {
+            repo.track(&paths)?;
+            for path in paths {
+                println!("Tracking {}", path.display().to_string().bright_green());
+            }
+        }
+        FileAction::Untrack { paths } => {
+            repo.untrack(&paths)?;
+            for path in paths {
+                println!("Untracking {}", path.display().to_string().bright_red());
+            }
+        }
+        FileAction::List { dirty } => {
+            if dirty {
+                repo.set_filter(ListFilter::Modified);
+            }
+            let paths = repo.collect::<Vec<_>>();
+            let paths_by_dir = group_tabs_by_directory(paths);
+            print_grouped_paths(&paths_by_dir);
+        }
+        FileAction::Save => {
+            repo.save_local_changes()?;
+            println!("{}", "DotFs saved successfully".bright_green());
+        }
+    }
+    Ok(())
+}
+
+fn group_tabs_by_directory(paths: Vec<PathBuf>) -> collections::BTreeMap<PathBuf, Vec<PathBuf>> {
+    debug!("Grouping {} paths by directory", paths.len());
+    let mut paths_by_dir: collections::BTreeMap<PathBuf, Vec<PathBuf>> =
+        collections::BTreeMap::new();
+    for file in paths {
+        let parent = file.parent().unwrap_or_else(|| Path::new("")).to_path_buf();
+        paths_by_dir.entry(parent).or_default().push(file);
+    }
+
+    paths_by_dir
+}
+
+fn get_home_dir() -> PathBuf {
+    directories::UserDirs::new()
+        .map(|dirs| dirs.home_dir().to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("/"))
+}
+
+fn display_path_relative_to_home<'a>(path: &'a Path, home: &'a Path) -> Cow<'a, Path> {
+    path.strip_prefix(home)
+        .map_or_else(|_| Cow::Borrowed(path), Cow::Borrowed)
+}
+
+fn print_grouped_paths(paths_by_dir: &collections::BTreeMap<PathBuf, Vec<PathBuf>>) {
+    let home = get_home_dir();
+
+    // Determine max widths for columns based on uncolored strings
+    let mut max_dir_len = "DIRECTORY".len();
+    let mut max_item_len = "ITEM".len();
+
+    // Collect all rows as plain strings first to calculate accurate column widths
+    let mut rows: Vec<(String, String, String)> = Vec::new();
+
+    for (dir, files) in paths_by_dir.iter() {
+        let display_dir_cow = display_path_relative_to_home(dir, &home);
+        let display_dir_str = if display_dir_cow.as_os_str().is_empty() {
+            ".".to_string() // Represent empty path as '.' for display
+        } else {
+            display_dir_cow.display().to_string()
+        };
+        max_dir_len = max_dir_len.max(display_dir_str.len());
+
+        for file in files {
+            let item_name_cow = file.file_name().unwrap_or_default().to_string_lossy();
+            let item_name_str = item_name_cow.to_string();
+            max_item_len = max_item_len.max(item_name_str.len());
+
+            let item_type = if file.is_dir() { "Dir" } else { "File" };
+            rows.push((
+                display_dir_str.clone(),
+                item_name_str,
+                item_type.to_string(),
+            ));
+        }
+    }
+
+    // Print Headers
+    println!(
+        "{:<width_dir$} {:<width_item$} {:<4}",
+        "DIRECTORY".bold(),
+        "ITEM".bold(),
+        "TYPE".bold(),
+        width_dir = max_dir_len,
+        width_item = max_item_len,
+    );
+    println!(
+        "{:-<width_dir$} {:-<width_item$} {:-<4}",
+        "",
+        "",
+        "",
+        width_dir = max_dir_len,
+        width_item = max_item_len,
+    );
+
+    // Print Data Rows
+    for (dir_str, item_name, item_type) in rows {
+        // Pad the string first to the determined width, then apply color.
+        // This ensures padding is based on visual length, not byte length including ANSI escape codes.
+        let padded_dir = format!("{dir_str: <max_dir_len$}");
+        let padded_item = format!("{item_name: <max_item_len$}");
+        let padded_type = format!("{item_type: <4}");
+
+        println!(
+            "{} {} {}",
+            padded_dir.blue().bold(),
+            padded_item.bright_green(),
+            padded_type.cyan(),
+        );
+    }
+}
 
 /// Manages system configuration files using a bare Git repository in the user's home directory.
 pub struct Dots {

@@ -1,7 +1,7 @@
 use anyhow::Result;
 use std::path::PathBuf;
 
-use crate::{dots::Dots, error::ShelfError};
+use crate::{app::dots::Dots, error::ShelfError};
 
 const HIDDEN_VAULT_DIR: &str = ".shelf";
 

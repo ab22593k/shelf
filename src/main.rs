@@ -1,10 +1,6 @@
 pub mod app;
-pub mod commit;
 pub mod config;
-pub mod dots;
 pub mod error;
-pub mod review;
-pub mod shell;
 pub mod utils;
 
 use crate::app::{Shelf, run_app};

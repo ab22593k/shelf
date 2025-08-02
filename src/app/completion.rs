@@ -1,5 +1,21 @@
-use anyhow::Result;
-use clap_complete::{Generator, generate};
+use anyhow::{Context, Result};
+use clap::{Args, CommandFactory};
+use clap_complete::{Generator, Shell, generate};
+
+#[derive(Args)]
+pub struct CompletionCommand {
+    /// The shell to generate completions for.
+    #[arg(value_enum)]
+    pub shell: Shell,
+}
+
+pub async fn run(args: CompletionCommand) -> Result<()> {
+    let mut cmd = super::Shelf::command();
+    let script =
+        conjure_completions(args.shell, &mut cmd).context("Printing completions failed")?;
+    println!("{script}");
+    Ok(())
+}
 
 /// Whispers shell magic as a UTF-8 string.
 ///

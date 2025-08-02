@@ -1,6 +1,11 @@
+use crate::utils::{harvest_staged_changes, spin_progress};
+use anyhow::{Context, Result, anyhow};
+use clap::Args;
 use rig::{
     agent::{Agent, AgentBuilder},
+    client::{CompletionClient, ProviderClient},
     completion::{CompletionModel, Prompt, PromptError},
+    providers::gemini,
 };
 
 const AGENT_PREAMBLE: &str = r#"You are a helpful code reviewer examining code changes.
@@ -129,4 +134,33 @@ impl<M: CompletionModel> Reviewer<M> {
 
         self.agent.prompt(prompt_body).await
     }
+}
+
+#[derive(Args)]
+pub struct ReviewCommand {
+    /// Override the configured model.
+    #[arg(short, long, default_value = "gemini-2.0-flash")]
+    pub model: String,
+}
+
+pub async fn run(args: ReviewCommand) -> Result<()> {
+    let reviews = handle_review_action(args.model.as_str()).await?;
+    println!("{reviews}");
+    Ok(())
+}
+
+async fn handle_review_action(model: &str) -> Result<String> {
+    let agent = gemini::Client::from_env();
+
+    let diff = harvest_staged_changes().context("Getting staged changes failed")?;
+
+    let msg = spin_progress(|| async {
+        let model = agent.completion_model(model);
+        let reviewer = Reviewer::new(model).with_diff(&diff);
+
+        reviewer.review().await.map_err(|e| anyhow!(e))
+    })
+    .await?;
+
+    Ok(msg)
 }
