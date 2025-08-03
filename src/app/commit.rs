@@ -12,9 +12,16 @@ use tempfile::NamedTempFile;
 use crate::app::ui::{UserAction, user_selection};
 use crate::utils::harvest_staged_changes;
 
-const PREAMBLE: &str = r#"You are an expert software developer assistant specialized in crafting clear, concise, informative, and contextually relevant Git commit messages. Your primary task is to **complete a given partial commit message**. You will be provided with a summary of the current code changes and relevant past commit history to help you understand the context and maintain a consistent style and 'personal' nature.
+const PREAMBLE: &str = r#"You are an expert software developer assistant specialized
+in crafting clear, concise, informative, and contextually relevant Git commit messages.
 
-The goal is to produce high-quality, complete commit messages that effectively track changes and aid collaboration. Ensure the completed message clearly summarizes the change, its purpose, and integrates seamlessly with the partial message provided. **Only return the completed commit message, do not add any additional conversational text or explanations**.
+Your primary task is to **complete a given partial commit message**. You will be provided
+with a summary of the current code changes and relevant past commit history to help you
+understand the context and maintain a consistent style and 'personal' nature.
+
+The goal is to produce high-quality, complete commit messages that effectively track changes
+and aid collaboration. Ensure the completed message clearly summarizes the change,
+its purpose, and integrates seamlessly with the partial message provided.
 
 ---
 
