@@ -1,12 +1,7 @@
 use crate::utils::{harvest_staged_changes, spin_progress};
 use anyhow::{Context, Result, anyhow};
 use clap::Args;
-use rig::{
-    agent::{Agent, AgentBuilder},
-    client::{CompletionClient, ProviderClient},
-    completion::{CompletionModel, Prompt, PromptError},
-    providers::gemini,
-};
+use rig::{client::builder::DynClientBuilder, completion::Prompt};
 
 const AGENT_PREAMBLE: &str = r#"You are a helpful code reviewer examining code changes.
 Based on the following code diff, provide a detailed code review with constructive feedback,
@@ -81,84 +76,54 @@ const REVIEW_TEMPLATE: &str = r#"**Instructions for Review:** "Analyze the code 
 - **Technology Choices**: Are the technology choices adequate for the problem?
 "#;
 
-/// Handles code review functionality by generating prompts for a completion model.
-///
-/// It encapsulates the logic for building a review-specific prompt and interacting
-/// with the underlying AI agent. This struct follows the builder pattern for configuration.
-pub struct Reviewer<M: CompletionModel> {
-    agent: Agent<M>,
-    diff: Option<String>,
-}
-
-impl<M: CompletionModel> Reviewer<M> {
-    /// Creates a new `Reviewer` with the given completion model.
-    ///
-    /// # Arguments
-    ///
-    /// * `model` - A `CompletionModel` that will be used to generate the review.
-    pub fn new(model: M) -> Self {
-        Self {
-            agent: AgentBuilder::new(model).preamble(AGENT_PREAMBLE).build(),
-            diff: None,
-        }
-    }
-
-    /// Sets the code diff to be reviewed.
-    ///
-    /// This method consumes the `Reviewer` and returns a new instance with the
-    /// diff configured, enabling the builder pattern.
-    ///
-    /// # Arguments
-    ///
-    /// * `diff` - A string slice containing the code changes to be reviewed.
-    pub fn with_diff(mut self, diff: &str) -> Self {
-        self.diff = Some(diff.to_string());
-        self
-    }
-
-    /// Generates the code review by sending the constructed prompt to the agent.
-    ///
-    /// The final prompt is composed of a standard review template and the diff
-    /// provided via `with_diff`.
-    ///
-    /// # Returns
-    ///
-    /// A `Result` which is `Ok` with the review string on success, or a `PromptError` on failure.
-    pub async fn review(&self) -> Result<String, PromptError> {
-        let diff_content = self
-            .diff
-            .as_deref()
-            .unwrap_or("No diff was provided for review.");
-
-        let prompt_body = format!("{REVIEW_TEMPLATE}\n\n<diff>\n{diff_content}\n</diff>",);
-
-        self.agent.prompt(prompt_body).await
-    }
-}
-
 #[derive(Args)]
 pub struct ReviewCommand {
+    /// Override the configured provider.
+    #[arg(short, long, default_value = "gemini")]
+    pub provider: String,
     /// Override the configured model.
     #[arg(short, long, default_value = "gemini-2.0-flash")]
     pub model: String,
+    /// Aspects of the code review to focus on.
+    #[arg(short, long, default_value = None, value_delimiter = ',', num_args = 1..)]
+    pub focus: Option<Vec<String>>,
 }
 
-pub async fn run(args: ReviewCommand) -> Result<()> {
-    let reviews = handle_review_action(args.model.as_str()).await?;
+pub(super) async fn run(args: ReviewCommand) -> Result<()> {
+    // Pass the entire args struct to review_action
+    let reviews = review_action(args).await?;
     println!("{reviews}");
     Ok(())
 }
 
-async fn handle_review_action(model: &str) -> Result<String> {
-    let agent = gemini::Client::from_env();
+// Modify review_action to accept ReviewCommand directly
+async fn review_action(args: ReviewCommand) -> Result<String> {
+    let client = DynClientBuilder::new();
+    let agent = client
+        // Access provider and model from the args struct
+        .agent(args.provider.as_str(), args.model.as_str())?
+        .preamble(AGENT_PREAMBLE)
+        .context(REVIEW_TEMPLATE)
+        .context(
+            &args
+                .focus
+                .map(|f| {
+                    let mut s = f.join("\n- ");
+                    s.insert_str(0, "- ");
+                    s.insert_str(0, "Focusing on the following aspects:\n");
+                    s
+                })
+                .unwrap_or_else(|| "Review all aspects of the code.".to_string()),
+        )
+        .temperature(0.2)
+        .build();
 
     let diff = harvest_staged_changes().context("Getting staged changes failed")?;
 
     let msg = spin_progress(|| async {
-        let model = agent.completion_model(model);
-        let reviewer = Reviewer::new(model).with_diff(&diff);
+        let reviews = agent.prompt(diff).await;
 
-        reviewer.review().await.map_err(|e| anyhow!(e))
+        reviews.map_err(|e| anyhow!(e))
     })
     .await?;
 

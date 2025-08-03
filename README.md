@@ -14,49 +14,6 @@ Integrated with git hooks and supporting multiple AI providers, Shelf adapts sea
 > **Note**: Currently, Shelf only supports Google Gemini as the AI provider.
 More providers will be added in future releases.
 
----
-
-## Usage
-
-### File Management Commands
-
-Track files:
-```bash
-shelf dots track ~/.bashrc
-```
-
-List tracked files:
-```bash
-shelf dots list
-```
-
-List only modified files:
-```bash
-shelf dots list --dirty
-```
-
-Untrack files:
-```bash
-shelf dots untrack ~/.bashrc
-```
-
-Save current changes:
-```bash
-shelf dots save
-```
-
-### AI-Powered Git Commands
-
-Generate a commit message for staged changes:
-```bash
-shelf commit --prefix="Some context" [--model MODEL] [--history N]
-```
-
-Review staged changes:
-```bash
-shelf review [--model MODEL]
-```
-
 ### Configuration
 
 Configure your AI provider (default is Google Gemini):
@@ -72,13 +29,9 @@ Generate shell completions:
 shelf completion zsh
 ```
 
----
-
 ## Contributing
 
 Contributions are welcome! Please submit a Pull Request with your improvements.
-
----
 
 ## License
 

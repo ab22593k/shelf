@@ -117,16 +117,15 @@ async fn handle_commit_action(context: &CommitContext<'_>) -> Result<()> {
             UserAction::EditWithEditor => {
                 current_commit_msg = edit_message_with_editor(&current_commit_msg)
                     .context("Failed to edit commit message with editor")?;
-                // After editing, show the new message and prompt again
                 continue;
             }
             UserAction::CommitChanges => {
                 commit_action(current_commit_msg)?;
-                return Ok(()); // Commit successful, exit the loop and function
+                return Ok(());
             }
             UserAction::Quit | UserAction::Cancelled => {
                 println!("{}", "Operation cancelled or quit.".bright_blue());
-                return Ok(()); // User decided to quit or cancelled the prompt, exit successfully
+                return Ok(());
             }
         }
     }
@@ -232,8 +231,8 @@ async fn commit_suggestion(context: &CommitContext<'_>) -> Result<String> {
         .collect::<Vec<_>>()
         .join("\n");
 
-    let client_builder = DynClientBuilder::new();
-    let agent = client_builder
+    let client = DynClientBuilder::new();
+    let agent = client
         .agent(context.provider, context.model)? // Propagate error instead of unwrap()
         .preamble(PREAMBLE)
         .temperature(0.2)

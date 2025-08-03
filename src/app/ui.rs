@@ -27,7 +27,6 @@ pub(super) fn user_selection() -> Result<UserAction> {
         Ok(1) => Ok(UserAction::EditWithEditor),
         Ok(2) => Ok(UserAction::CommitChanges),
         Ok(3) => Ok(UserAction::Quit),
-        // Handle cases where dialoguer might return an error (e.g., Ctrl+C) or an unexpected selection
         _ => Ok(UserAction::Cancelled),
     }
 }
