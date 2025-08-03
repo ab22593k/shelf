@@ -11,14 +11,11 @@ workflow with AI-powered features. It enables you to:
 
 Integrated with git hooks and supporting multiple AI providers, Shelf adapts seamlessly to your development workflow.
 
-> **Note**: Currently, Shelf only supports Google Gemini as the AI provider.
-More providers will be added in future releases.
-
 ### Configuration
 
 Configure your AI provider (default is Google Gemini):
 ```bash
-export GEMINI_API_KEY="your-key"
+export GEMINI_API_KEY="key"
 ```
 
 ### Shell Completion
