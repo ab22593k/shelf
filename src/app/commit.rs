@@ -9,6 +9,7 @@ use std::path::Path;
 use std::process::Command;
 use tempfile::NamedTempFile;
 
+use crate::app::ui::{UserAction, user_selection};
 use crate::utils::harvest_staged_changes;
 
 const PREAMBLE: &str = r#"You are an expert software developer assistant specialized in crafting clear, concise, informative, and contextually relevant Git commit messages. Your primary task is to **complete a given partial commit message**. You will be provided with a summary of the current code changes and relevant past commit history to help you understand the context and maintain a consistent style and 'personal' nature.
@@ -31,6 +32,27 @@ The goal is to produce high-quality, complete commit messages that effectively t
 **PARTIAL_COMMIT_MESSAGE:** refactor: Rename old_auth_method to new_
 **COMPLETED_COMMIT_MESSAGE:** refactor: Rename old_auth_method to new_secure_auth_method for enhanced security and clarity"#;
 
+/// A helper struct to group common parameters used across commit generation functions.
+struct CommitContext<'a> {
+    prefix: &'a str,
+    provider: &'a str,
+    model: &'a str,
+    history_depth: &'a usize,
+    ignored: &'a Option<Vec<String>>,
+}
+
+impl<'a> From<&'a CommitCommand> for CommitContext<'a> {
+    fn from(args: &'a CommitCommand) -> Self {
+        CommitContext {
+            prefix: &args.prefix,
+            provider: &args.provider,
+            model: &args.model,
+            history_depth: &args.history_depth,
+            ignored: &args.ignored,
+        }
+    }
+}
+
 #[derive(Args)]
 pub struct CommitCommand {
     /// Suitable continuation context for the commit message.
@@ -51,54 +73,38 @@ pub struct CommitCommand {
 }
 
 pub async fn run(args: CommitCommand) -> Result<()> {
-    handle_commit_action(
-        &args.prefix,
-        &args.provider,
-        &args.model,
-        &args.history_depth,
-        &args.ignored,
-    )
-    .await?;
+    let context = CommitContext::from(&args);
+    handle_commit_action(&context).await?;
     Ok(())
 }
 
-async fn generate_commit_message(
-    prefix: &str,
-    provider: &str,
-    model: &str,
-    history: &usize,
-    ignored: &Option<Vec<String>>,
-) -> Result<String> {
-    let response = conjure_commit_suggestion(prefix, provider, model, history, ignored).await?;
+async fn generate_commit_message(context: &CommitContext<'_>) -> Result<String> {
+    let response = commit_suggestion(context).await?;
 
     // If the response is a Gemini JSON structure, extract the commit message; otherwise, use the plain string
     let commit_msg = if let Ok(parsed) =
         serde_json::from_str::<gemini_api_types::GenerateContentResponse>(&response)
     {
-        extract_commit_message(&parsed)
+        commit_message_res(&parsed)
     } else {
         response
     };
     Ok(commit_msg)
 }
 
-async fn handle_commit_action(
-    prefix: &str,
-    provider: &str,
-    model: &str,
-    history: &usize,
-    ignored: &Option<Vec<String>>,
-) -> Result<String> {
+async fn handle_commit_action(context: &CommitContext<'_>) -> Result<()> {
     let mut current_commit_msg = String::new();
 
     loop {
         if current_commit_msg.is_empty() {
             // Generate commit message using AI model only if not already generated or edited
-            current_commit_msg =
-                generate_commit_message(prefix, provider, model, history, ignored).await?;
+            current_commit_msg = generate_commit_message(context).await?;
         }
 
-        println!("{current_commit_msg}",);
+        println!(
+            "\nProposed Commit Message:\n{}",
+            current_commit_msg.bright_yellow()
+        );
 
         // Get user action selection
         let selection = user_selection()?;
@@ -106,19 +112,22 @@ async fn handle_commit_action(
             UserAction::RegenerateMessage => {
                 // Clear to force regeneration
                 current_commit_msg.clear();
-
                 continue;
             }
             UserAction::EditWithEditor => {
                 current_commit_msg = edit_message_with_editor(&current_commit_msg)
                     .context("Failed to edit commit message with editor")?;
-
                 // After editing, show the new message and prompt again
                 continue;
             }
-            UserAction::CommitChanges => return create_git_commit(current_commit_msg),
-            UserAction::Quit => return Ok("Quitting".to_string()),
-            UserAction::Cancelled => return Ok("Cancelled".to_string()),
+            UserAction::CommitChanges => {
+                commit_action(current_commit_msg)?;
+                return Ok(()); // Commit successful, exit the loop and function
+            }
+            UserAction::Quit | UserAction::Cancelled => {
+                println!("{}", "Operation cancelled or quit.".bright_blue());
+                return Ok(()); // User decided to quit or cancelled the prompt, exit successfully
+            }
         }
     }
 }
@@ -160,7 +169,7 @@ fn edit_message_with_editor(initial_message: &str) -> Result<String> {
     Ok(edited_message)
 }
 
-fn extract_commit_message(response: &gemini_api_types::GenerateContentResponse) -> String {
+fn commit_message_res(response: &gemini_api_types::GenerateContentResponse) -> String {
     response
         .candidates
         .first()
@@ -172,46 +181,9 @@ fn extract_commit_message(response: &gemini_api_types::GenerateContentResponse) 
         .unwrap_or_else(|| String::from("No commit message generated"))
 }
 
-enum UserAction {
-    RegenerateMessage,
-    CommitChanges,
-    EditWithEditor,
-    Quit,
-    Cancelled,
-}
-
-fn user_selection() -> Result<UserAction> {
-    use dialoguer::{Select, theme::ColorfulTheme};
-    let options = vec![
-        "Regenerate message",
-        "Edit with Editor",
-        "Commit changes",
-        "Quit",
-    ];
-    let selection = Select::with_theme(&ColorfulTheme::default())
-        .with_prompt("What would you like to do next?")
-        .default(0)
-        .items(&options)
-        .interact();
-
-    match selection {
-        Ok(0) => Ok(UserAction::RegenerateMessage),
-        Ok(1) => Ok(UserAction::EditWithEditor),
-        Ok(2) => Ok(UserAction::CommitChanges),
-        Ok(3) => Ok(UserAction::Quit),
-        _ => {
-            println!(
-                "
-Invalid selection"
-            );
-            Ok(UserAction::Cancelled)
-        }
-    }
-}
-/// Creates a git commit with the generated message
-fn create_git_commit(msg: String) -> Result<String> {
+fn commit_action(message: String) -> Result<String> {
     let repo = Repository::open(".")?;
-    let sig = repo.signature()?;
+    let signature = repo.signature()?;
     let tree_id = repo.index()?.write_tree()?;
     let tree = repo.find_tree(tree_id)?;
 
@@ -223,34 +195,18 @@ fn create_git_commit(msg: String) -> Result<String> {
 
     repo.commit(
         Some("HEAD"),
-        &sig,
-        &sig,
-        &msg,
+        &signature,
+        &signature,
+        &message,
         &tree,
         parents.iter().collect::<Vec<_>>().as_slice(),
     )?;
 
     println!("{}", "Created git commit successfully".bright_green());
-    Ok(msg)
+    Ok(message)
 }
 
-/// Conjures commit suggestions from the ether.
-///
-/// This function leverages `rig`'s `Agent` to manifest a commit message by
-/// synthesizing staged git diffs, recent commit lore, and an optional user-crafted prefix.
-///
-/// # Arguments
-/// * `commit_prefix` - An optional precursor to the commit message.
-/// * `ai_model` - The moniker of the AI model to invoke.
-/// * `history_span` - The number of recent commits to weave into the narrative.
-/// * `excluded_files` - A list of file patterns to shroud from the commit history.
-pub async fn conjure_commit_suggestion(
-    commit_prefix: &str,
-    provider: &str,
-    model: &str,
-    history_span: &usize,
-    excluded_files: &Option<Vec<String>>,
-) -> Result<String> {
+async fn commit_suggestion(context: &CommitContext<'_>) -> Result<String> {
     let diff = harvest_staged_changes().context("Conjuring staged changes failed")?;
     if diff.trim().is_empty() {
         return Err(anyhow!(
@@ -258,10 +214,11 @@ pub async fn conjure_commit_suggestion(
         ));
     }
 
-    let ignored_patterns: Option<Vec<&str>> = excluded_files
+    let ignored_patterns: Option<Vec<&str>> = context
+        .ignored
         .as_ref()
         .map(|v| v.iter().map(|s| s.as_str()).collect());
-    let commit_chronicle = fetch_commit_saga(history_span, ignored_patterns.as_deref())?;
+    let commit_chronicle = commit_history(context.history_depth, ignored_patterns.as_deref())?;
 
     let history_tapestry = commit_chronicle
         .iter()
@@ -277,24 +234,23 @@ pub async fn conjure_commit_suggestion(
 
     let client_builder = DynClientBuilder::new();
     let agent = client_builder
-        .agent(provider, model)
-        .unwrap()
+        .agent(context.provider, context.model)? // Propagate error instead of unwrap()
         .preamble(PREAMBLE)
         .temperature(0.2)
         .max_tokens(200)
         .build();
 
-    let prompt_essence = format!(
-        "CODE_CHANGES:\n```diff\n{diff}\n```\n\nCOMMIT_HISTORY:\n{history_tapestry}\n\nPARTIAL_COMMIT_MESSAGE: {commit_prefix}",
+    let prompt = format!(
+        "CODE_CHANGES:\n```diff\n{diff}\n```\n\nCOMMIT_HISTORY:\n{history_tapestry}\n\nPARTIAL_COMMIT_MESSAGE: {}",
+        context.prefix,
     );
 
-    let revelation = agent.prompt(prompt_essence).await?;
+    let revelation = agent.prompt(prompt).await?;
 
     Ok(revelation)
 }
 
-/// Fetches the last N commits from the repository, optionally evading commits matching patterns.
-pub fn fetch_commit_saga(
+pub fn commit_history(
     saga_depth: &usize,
     evade_patterns: Option<&[&str]>,
 ) -> Result<Vec<(Oid, String)>> {
@@ -320,7 +276,7 @@ pub fn fetch_commit_saga(
         match commit_id {
             Ok(oid) => match repository.find_commit(oid) {
                 Ok(commit) => {
-                    if !should_shun_commit(&commit, evade_patterns) {
+                    if !evade_commit(&commit, evade_patterns) {
                         saga_chapters.push((oid, commit.message().unwrap_or_default().to_string()));
                     }
                 }
@@ -336,8 +292,7 @@ pub fn fetch_commit_saga(
     Ok(saga_chapters)
 }
 
-/// Ascertains if a commit should be shunned based on file patterns.
-fn should_shun_commit(commit: &Commit, evade_patterns: Option<&[&str]>) -> bool {
+fn evade_commit(commit: &Commit, evade_patterns: Option<&[&str]>) -> bool {
     if let (Some(patterns), Ok(file_tree)) = (evade_patterns, commit.tree()) {
         for pattern in patterns {
             if file_tree.iter().any(|entry| {

@@ -3,10 +3,12 @@ use clap::{Parser, Subcommand};
 
 use crate::app::dots::Dots;
 
-pub mod commit;
-pub mod completion;
+mod commit;
+mod completion;
+mod review;
+mod ui;
+
 pub mod dots;
-pub mod review;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
