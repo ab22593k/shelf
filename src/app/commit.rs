@@ -2,13 +2,9 @@ use anyhow::{Context, Result, anyhow};
 use clap::Args;
 use colored::Colorize;
 use git2::{Commit, Oid, Repository};
+use rig::client::builder::DynClientBuilder;
+use rig::completion::Prompt;
 use rig::providers::gemini::completion::gemini_api_types::{self, Part};
-use rig::{
-    agent::AgentBuilder,
-    client::{CompletionClient, ProviderClient},
-    completion::Prompt,
-    providers::gemini,
-};
 use std::path::Path;
 use std::process::Command;
 use tempfile::NamedTempFile;
@@ -38,10 +34,13 @@ The goal is to produce high-quality, complete commit messages that effectively t
 #[derive(Args)]
 pub struct CommitCommand {
     /// Suitable continuation context for the commit message.
-    #[arg(short, long)]
+    #[arg(long)]
     pub prefix: String,
+    /// Override the model provider.
+    #[arg(short, long, default_value = "gemini")]
+    pub provider: String,
     /// Override the configured model.
-    #[arg(short, long, default_value = "gemini-2.0-flash")]
+    #[arg(short, long, default_value = "gemini-2.0-flash-lite")]
     pub model: String,
     /// Include the nth commit history.
     #[arg(long, short = 'd', default_value = "10")]
@@ -54,6 +53,7 @@ pub struct CommitCommand {
 pub async fn run(args: CommitCommand) -> Result<()> {
     handle_commit_action(
         &args.prefix,
+        &args.provider,
         &args.model,
         &args.history_depth,
         &args.ignored,
@@ -64,11 +64,12 @@ pub async fn run(args: CommitCommand) -> Result<()> {
 
 async fn generate_commit_message(
     prefix: &str,
+    provider: &str,
     model: &str,
     history: &usize,
     ignored: &Option<Vec<String>>,
 ) -> Result<String> {
-    let response = conjure_commit_suggestion(prefix, model, history, ignored).await?;
+    let response = conjure_commit_suggestion(prefix, provider, model, history, ignored).await?;
 
     // If the response is a Gemini JSON structure, extract the commit message; otherwise, use the plain string
     let commit_msg = if let Ok(parsed) =
@@ -83,6 +84,7 @@ async fn generate_commit_message(
 
 async fn handle_commit_action(
     prefix: &str,
+    provider: &str,
     model: &str,
     history: &usize,
     ignored: &Option<Vec<String>>,
@@ -92,7 +94,8 @@ async fn handle_commit_action(
     loop {
         if current_commit_msg.is_empty() {
             // Generate commit message using AI model only if not already generated or edited
-            current_commit_msg = generate_commit_message(prefix, model, history, ignored).await?;
+            current_commit_msg =
+                generate_commit_message(prefix, provider, model, history, ignored).await?;
         }
 
         println!("{current_commit_msg}",);
@@ -243,7 +246,8 @@ fn create_git_commit(msg: String) -> Result<String> {
 /// * `excluded_files` - A list of file patterns to shroud from the commit history.
 pub async fn conjure_commit_suggestion(
     commit_prefix: &str,
-    ai_model: &str,
+    provider: &str,
+    model: &str,
     history_span: &usize,
     excluded_files: &Option<Vec<String>>,
 ) -> Result<String> {
@@ -271,20 +275,20 @@ pub async fn conjure_commit_suggestion(
         .collect::<Vec<_>>()
         .join("\n");
 
-    let client = gemini::Client::from_env();
-    let muse_model = client.completion_model(ai_model);
-
-    let prompt_essence = format!(
-        "CODE_CHANGES:\n```diff\n{diff}\n```\n\nCOMMIT_HISTORY:\n{history_tapestry}\n\nPARTIAL_COMMIT_MESSAGE: {commit_prefix}",
-    );
-
-    let artificer = AgentBuilder::new(muse_model)
+    let client_builder = DynClientBuilder::new();
+    let agent = client_builder
+        .agent(provider, model)
+        .unwrap()
         .preamble(PREAMBLE)
         .temperature(0.2)
         .max_tokens(200)
         .build();
 
-    let revelation = artificer.prompt(prompt_essence).await?;
+    let prompt_essence = format!(
+        "CODE_CHANGES:\n```diff\n{diff}\n```\n\nCOMMIT_HISTORY:\n{history_tapestry}\n\nPARTIAL_COMMIT_MESSAGE: {commit_prefix}",
+    );
+
+    let revelation = agent.prompt(prompt_essence).await?;
 
     Ok(revelation)
 }
