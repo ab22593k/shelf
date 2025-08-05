@@ -5,6 +5,7 @@ use crate::app::dots::Dots;
 
 mod commit;
 mod completion;
+mod git;
 mod review;
 mod ui;
 

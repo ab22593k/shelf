@@ -1,232 +1,230 @@
 use anyhow::{Context, Result, anyhow};
 use clap::Args;
 use colored::Colorize;
-use git2::{Commit, Oid, Repository};
+use handlebars::Handlebars;
 use rig::client::builder::DynClientBuilder;
 use rig::completion::Prompt;
 use rig::providers::gemini::completion::gemini_api_types::{self, Part};
-use std::path::Path;
+use serde_json::json;
 use std::process::Command;
 use tempfile::NamedTempFile;
 
+use crate::app::git::{commit_action, commit_history};
 use crate::app::ui::{UserAction, user_selection};
 use crate::utils::harvest_staged_changes;
 
-const PREAMBLE: &str = r#"You are an expert software developer assistant specialized
-in crafting clear, concise, informative, and contextually relevant Git commit messages.
-
-Your primary task is to **complete a given partial commit message**. You will be provided
-with a summary of the current code changes and relevant past commit history to help you
-understand the context and maintain a consistent style and 'personal' nature.
-
-The goal is to produce high-quality, complete commit messages that effectively track changes
-and aid collaboration. Ensure the completed message clearly summarizes the change,
-its purpose, and integrates seamlessly with the partial message provided.
-
----
-
-**EXAMPLE 1 (Few-shot)**
-
-**CODE_CHANGES:**
-```diff
--  def old_auth_method():
-+  def new_secure_auth_method():
-```
-**COMMIT_HISTORY:**
-• feat: Implement user authentication module
-• refactor: Refactor database schema for better performance
-• fix: Resolve critical security vulnerability in login flow
-**PARTIAL_COMMIT_MESSAGE:** refactor: Rename old_auth_method to new_
-**COMPLETED_COMMIT_MESSAGE:** refactor: Rename old_auth_method to new_secure_auth_method for enhanced security and clarity"#;
-
-/// A helper struct to group common parameters used across commit generation functions.
-struct CommitContext<'a> {
+/// Configuration context for commit message generation
+struct CommitConfig<'a> {
     prefix: &'a str,
     provider: &'a str,
     model: &'a str,
     history_depth: &'a usize,
-    ignored: &'a Option<Vec<String>>,
+    ignored_patterns: &'a Option<Vec<String>>,
 }
 
-impl<'a> From<&'a CommitCommand> for CommitContext<'a> {
-    fn from(args: &'a CommitCommand) -> Self {
-        CommitContext {
-            prefix: &args.prefix,
-            provider: &args.provider,
-            model: &args.model,
-            history_depth: &args.history_depth,
-            ignored: &args.ignored,
+impl<'a> From<&'a CommitCommand> for CommitConfig<'a> {
+    fn from(cmd: &'a CommitCommand) -> Self {
+        Self {
+            prefix: &cmd.prefix,
+            provider: &cmd.provider,
+            model: &cmd.model,
+            history_depth: &cmd.history_depth,
+            ignored_patterns: &cmd.ignored,
         }
     }
 }
 
 #[derive(Args)]
 pub struct CommitCommand {
-    /// Suitable continuation context for the commit message.
-    #[arg(long)]
+    /// Prefix to prepend to the generated commit message
+    #[arg(long, default_value = "")]
     pub prefix: String,
-    /// Override the model provider.
+
+    /// AI model provider to use for generation
     #[arg(short, long, default_value = "gemini")]
     pub provider: String,
-    /// Override the configured model.
+
+    /// Specific model to use for commit message generation
     #[arg(short, long, default_value = "gemini-2.0-flash-lite")]
     pub model: String,
-    /// Include the nth commit history.
+
+    /// Number of previous commits to include as context
     #[arg(long, short = 'd', default_value = "10")]
     pub history_depth: usize,
-    /// Ignore specific files or patterns when generating a commit (comma-separated).
+
+    /// File patterns to ignore when generating commits (comma-separated)
     #[arg(short, long, default_value = None, value_delimiter = ',', num_args = 1..)]
     pub ignored: Option<Vec<String>>,
 }
 
 pub async fn run(args: CommitCommand) -> Result<()> {
-    let context = CommitContext::from(&args);
-    handle_commit_action(&context).await?;
-    Ok(())
+    let config = CommitConfig::from(&args);
+    execute_commit_workflow(&config).await
 }
 
-async fn generate_commit_message(context: &CommitContext<'_>) -> Result<String> {
-    let response = commit_suggestion(context).await?;
-
-    // If the response is a Gemini JSON structure, extract the commit message; otherwise, use the plain string
-    let commit_msg = if let Ok(parsed) =
-        serde_json::from_str::<gemini_api_types::GenerateContentResponse>(&response)
-    {
-        commit_message_res(&parsed)
-    } else {
-        response
-    };
-    Ok(commit_msg)
-}
-
-async fn handle_commit_action(context: &CommitContext<'_>) -> Result<()> {
-    let mut current_commit_msg = String::new();
+/// Main commit workflow orchestrator
+async fn execute_commit_workflow(config: &CommitConfig<'_>) -> Result<()> {
+    let mut commit_message = String::new();
 
     loop {
-        if current_commit_msg.is_empty() {
-            // Generate commit message using AI model only if not already generated or edited
-            current_commit_msg = generate_commit_message(context).await?;
+        // Generate message only when needed (first time or after regeneration)
+        if commit_message.is_empty() {
+            commit_message = generate_commit_message(config).await?;
         }
 
-        println!(
-            "\nProposed Commit Message:\n{}",
-            current_commit_msg.bright_yellow()
-        );
+        display_proposed_message(&commit_message);
 
-        // Get user action selection
-        let selection = user_selection()?;
-        match selection {
+        match get_user_action()? {
             UserAction::RegenerateMessage => {
-                // Clear to force regeneration
-                current_commit_msg.clear();
-                continue;
+                commit_message.clear(); // Force regeneration on next iteration
             }
             UserAction::EditWithEditor => {
-                current_commit_msg = edit_message_with_editor(&current_commit_msg)
-                    .context("Failed to edit commit message with editor")?;
-                continue;
+                commit_message = edit_with_external_editor(&commit_message)?;
             }
             UserAction::CommitChanges => {
-                commit_action(current_commit_msg)?;
+                commit_action(commit_message)?;
                 return Ok(());
             }
             UserAction::Quit | UserAction::Cancelled => {
-                println!("{}", "Operation cancelled or quit.".bright_blue());
+                display_cancellation_message();
                 return Ok(());
             }
         }
     }
 }
 
-fn edit_message_with_editor(initial_message: &str) -> Result<String> {
-    // Create a temporary file
-    let mut temp_file = NamedTempFile::new().context("Failed to create temporary file")?;
+/// Generate commit message using AI model
+async fn generate_commit_message(config: &CommitConfig<'_>) -> Result<String> {
+    let response = request_commit_suggestion(config).await?;
 
-    // Write the initial message to the temporary file
-    std::io::Write::write_all(&mut temp_file, initial_message.as_bytes())
-        .context("Failed to write initial message to temporary file")?;
-
-    // Determine the editor to use
-    let editor = std::env::var("GIT_EDITOR")
-        .or_else(|_| std::env::var("EDITOR"))
-        .or_else(|_| std::env::var("VISUAL"))
-        .unwrap_or_else(|_| {
-            if cfg!(target_os = "windows") {
-                "notepad".to_string()
-            } else {
-                "vi".to_string()
-            }
-        });
-
-    // Spawn the editor process
-    let status = Command::new(&editor)
-        .arg(temp_file.path())
-        .status()
-        .with_context(|| format!("Failed to open editor: {editor}",))?;
-
-    if !status.success() {
-        return Err(anyhow!("Editor exited with a non-zero status."));
+    // Try to parse as Gemini API response first, fall back to raw text
+    if let Ok(parsed_response) =
+        serde_json::from_str::<gemini_api_types::GenerateContentResponse>(&response)
+    {
+        Ok(extract_text_from_gemini_response(&parsed_response))
+    } else {
+        Ok(response)
     }
-
-    // Read the modified content from the temporary file
-    let edited_message = std::fs::read_to_string(temp_file.path())
-        .context("Failed to read edited message from temporary file")?;
-
-    Ok(edited_message)
 }
 
-fn commit_message_res(response: &gemini_api_types::GenerateContentResponse) -> String {
+/// Display the proposed commit message to the user
+fn display_proposed_message(message: &str) {
+    println!("\nProposed Commit Message:\n{}", message.bright_yellow());
+}
+
+/// Get user's chosen action
+fn get_user_action() -> Result<UserAction> {
+    user_selection()
+}
+
+/// Display cancellation message
+fn display_cancellation_message() {
+    println!("{}", "Operation cancelled.".bright_blue());
+}
+
+/// Open external editor for commit message editing
+fn edit_with_external_editor(initial_message: &str) -> Result<String> {
+    let temp_file = create_temp_file_with_content(initial_message)?;
+    let editor = determine_editor();
+
+    launch_editor(&editor, temp_file.path())?;
+    read_edited_content(temp_file.path())
+}
+
+/// Create temporary file with initial content
+fn create_temp_file_with_content(content: &str) -> Result<NamedTempFile> {
+    let mut temp_file = NamedTempFile::new().context("Failed to create temporary file")?;
+
+    std::io::Write::write_all(&mut temp_file, content.as_bytes())
+        .context("Failed to write content to temporary file")?;
+
+    Ok(temp_file)
+}
+
+/// Determine which editor to use based on environment variables
+fn determine_editor() -> String {
+    std::env::var("GIT_EDITOR")
+        .or_else(|_| std::env::var("EDITOR"))
+        .or_else(|_| std::env::var("VISUAL"))
+        .unwrap_or_else(|_| default_editor())
+}
+
+/// Get platform-specific default editor
+fn default_editor() -> String {
+    if cfg!(target_os = "windows") {
+        "notepad".to_string()
+    } else {
+        "vi".to_string()
+    }
+}
+
+/// Launch the chosen editor with the specified file
+fn launch_editor(editor: &str, file_path: &std::path::Path) -> Result<()> {
+    let status = Command::new(editor)
+        .arg(file_path)
+        .status()
+        .with_context(|| format!("Failed to launch editor: {editor}"))?;
+
+    if !status.success() {
+        return Err(anyhow!("Editor exited with non-zero status"));
+    }
+
+    Ok(())
+}
+
+/// Read the edited content from the temporary file
+fn read_edited_content(file_path: &std::path::Path) -> Result<String> {
+    std::fs::read_to_string(file_path).context("Failed to read edited content from temporary file")
+}
+
+/// Extract text content from Gemini API response
+fn extract_text_from_gemini_response(
+    response: &gemini_api_types::GenerateContentResponse,
+) -> String {
     response
         .candidates
         .first()
-        .and_then(|candidate| candidate.content.parts.iter().next())
+        .map(|candidate| candidate.content.parts.first())
         .and_then(|part| match part {
-            Part::Text(s) => Some(s.clone()),
+            Part::Text(text) => Some(text.clone()),
             _ => None,
         })
-        .unwrap_or_else(|| String::from("No commit message generated"))
+        .unwrap_or_else(|| "No commit message generated".to_string())
 }
 
-fn commit_action(message: String) -> Result<String> {
-    let repo = Repository::open(".")?;
-    let signature = repo.signature()?;
-    let tree_id = repo.index()?.write_tree()?;
-    let tree = repo.find_tree(tree_id)?;
+/// Request commit message suggestion from AI model
+async fn request_commit_suggestion(config: &CommitConfig<'_>) -> Result<String> {
+    let diff_content = harvest_staged_changes().context("Failed to retrieve staged changes")?;
 
-    let parents = match repo.head() {
-        Ok(head) => vec![head.peel_to_commit()?],
-        Err(ref e) if e.code() == git2::ErrorCode::UnbornBranch => vec![],
-        Err(e) => return Err(e.into()),
-    };
+    validate_diff_content(&diff_content)?;
 
-    repo.commit(
-        Some("HEAD"),
-        &signature,
-        &signature,
-        &message,
-        &tree,
-        parents.iter().collect::<Vec<_>>().as_slice(),
-    )?;
+    let commit_history = build_commit_history(config)?;
+    let rendered_prompt = build_prompt_from_template(config, &diff_content, &commit_history)?;
 
-    println!("{}", "Created git commit successfully".bright_green());
-    Ok(message)
+    let client = create_client(config)?;
+    let response = client.prompt(rendered_prompt).await?;
+
+    Ok(response)
 }
 
-async fn commit_suggestion(context: &CommitContext<'_>) -> Result<String> {
-    let diff = harvest_staged_changes().context("Conjuring staged changes failed")?;
+/// Validate that there are staged changes to commit
+fn validate_diff_content(diff: &str) -> Result<()> {
     if diff.trim().is_empty() {
-        return Err(anyhow!(
-            "Cannot conjure a commit message from an empty diff"
-        ));
+        return Err(anyhow!("Cannot generate commit message from empty diff"));
     }
+    Ok(())
+}
 
-    let ignored_patterns: Option<Vec<&str>> = context
-        .ignored
+/// Build formatted commit history string
+fn build_commit_history(config: &CommitConfig<'_>) -> Result<String> {
+    let ignored_patterns = config
+        .ignored_patterns
         .as_ref()
-        .map(|v| v.iter().map(|s| s.as_str()).collect());
-    let commit_chronicle = commit_history(context.history_depth, ignored_patterns.as_deref())?;
+        .map(|patterns| patterns.iter().map(String::as_str).collect::<Vec<_>>());
 
-    let history_tapestry = commit_chronicle
+    let commits = commit_history(config.history_depth, ignored_patterns.as_deref())?;
+
+    let formatted_history = commits
         .iter()
         .map(|(oid, message)| {
             format!(
@@ -238,78 +236,61 @@ async fn commit_suggestion(context: &CommitContext<'_>) -> Result<String> {
         .collect::<Vec<_>>()
         .join("\n");
 
-    let client = DynClientBuilder::new();
-    let agent = client
-        .agent(context.provider, context.model)? // Propagate error instead of unwrap()
-        .preamble(PREAMBLE)
+    if formatted_history.is_empty() {
+        Ok(String::new())
+    } else {
+        Ok(format!("COMMIT_HISTORY:\n{formatted_history}"))
+    }
+}
+
+/// Build the complete prompt from template and context data
+fn build_prompt_from_template(
+    config: &CommitConfig<'_>,
+    diff_content: &str,
+    commit_history: &str,
+) -> Result<String> {
+    let template_content = load_prompt_template()?;
+    let template_data = create_template_data(config, diff_content, commit_history);
+
+    let handlebars = Handlebars::new();
+    handlebars
+        .render_template(&template_content, &template_data)
+        .context("Failed to render prompt template")
+}
+
+/// Load the Handlebars prompt template from file
+fn load_prompt_template() -> Result<String> {
+    std::fs::read_to_string("assets/assistant_commit_prompt.hbs")
+        .context("Failed to read commit prompt template")
+}
+
+/// Create template data for Handlebars rendering
+fn create_template_data(
+    config: &CommitConfig<'_>,
+    diff_content: &str,
+    commit_history: &str,
+) -> serde_json::Value {
+    let partial_commit_section = if config.prefix.is_empty() {
+        String::new()
+    } else {
+        format!("PARTIAL_COMMIT_MESSAGE:\n```\n{}```\n", config.prefix)
+    };
+
+    json!({
+        "CODE_CHANGES": format!("```diff\n{diff_content}\n```"),
+        "COMMIT_HISTORY": format!("```\n{commit_history}\n```\n"),
+        "PARTIAL_COMMIT_MESSAGE": partial_commit_section
+    })
+}
+
+/// Create and configure AI client for commit message generation
+fn create_client(config: &CommitConfig<'_>) -> Result<impl Prompt> {
+    let client_builder = DynClientBuilder::new();
+    let agent = client_builder
+        .agent(config.provider, config.model)?
         .temperature(0.2)
         .max_tokens(200)
         .build();
 
-    let prompt = format!(
-        "CODE_CHANGES:\n```diff\n{diff}\n```\n\nCOMMIT_HISTORY:\n{history_tapestry}\n\nPARTIAL_COMMIT_MESSAGE: {}",
-        context.prefix,
-    );
-
-    let revelation = agent.prompt(prompt).await?;
-
-    Ok(revelation)
-}
-
-pub fn commit_history(
-    saga_depth: &usize,
-    evade_patterns: Option<&[&str]>,
-) -> Result<Vec<(Oid, String)>> {
-    let repository =
-        Repository::open(Path::new(".")).context("Unearthing git repository failed")?;
-    let apex_commit = repository
-        .head()
-        .context("Seeking repository HEAD failed")?
-        .peel_to_commit()
-        .context("Seeking HEAD commit failed")?;
-    let mut chronicle_walker = repository
-        .revwalk()
-        .context("Weaving revision chronicle failed")?;
-    chronicle_walker
-        .push(apex_commit.id())
-        .context("Anchoring starting commit failed")?;
-    chronicle_walker
-        .set_sorting(git2::Sort::TIME)
-        .context("Setting chronicle order failed")?;
-
-    let mut saga_chapters = Vec::new();
-    for commit_id in chronicle_walker.take(*saga_depth) {
-        match commit_id {
-            Ok(oid) => match repository.find_commit(oid) {
-                Ok(commit) => {
-                    if !evade_commit(&commit, evade_patterns) {
-                        saga_chapters.push((oid, commit.message().unwrap_or_default().to_string()));
-                    }
-                }
-                Err(err) => {
-                    eprintln!("Failed to find commit {oid}: {err}");
-                }
-            },
-            Err(err) => {
-                eprintln!("Invalid commit ID: {err}");
-            }
-        }
-    }
-    Ok(saga_chapters)
-}
-
-fn evade_commit(commit: &Commit, evade_patterns: Option<&[&str]>) -> bool {
-    if let (Some(patterns), Ok(file_tree)) = (evade_patterns, commit.tree()) {
-        for pattern in patterns {
-            if file_tree.iter().any(|entry| {
-                entry
-                    .name()
-                    .map(|name| name.contains(pattern))
-                    .unwrap_or(false)
-            }) {
-                return true;
-            }
-        }
-    }
-    false
+    Ok(agent)
 }
