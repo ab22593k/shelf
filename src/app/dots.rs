@@ -13,6 +13,14 @@ use crate::{
     utils::{shine_success, verify_git_presence},
 };
 
+const HEADER_DIRECTORY: &str = "DIRECTORY";
+const HEADER_ITEM: &str = "ITEM";
+const HEADER_TYPE: &str = "TYPE";
+const EMPTY_DIR_DOT: &str = ".";
+const TYPE_DIR: &str = "Dir";
+const TYPE_FILE: &str = "File";
+const SAVE_SUCCESS: &str = "DotFs saved successfully";
+
 #[derive(Args)]
 pub struct DotsCommand {
     #[command(subcommand)]
@@ -65,7 +73,7 @@ pub async fn run(args: DotsCommand, mut repo: Dots) -> Result<()> {
         }
         FileAction::Save => {
             repo.save_local_changes()?;
-            println!("{}", "DotFs saved successfully".bright_green());
+            println!("{}", SAVE_SUCCESS.bright_green());
         }
     }
     Ok(())
@@ -98,8 +106,8 @@ fn print_grouped_paths(paths_by_dir: &collections::BTreeMap<PathBuf, Vec<PathBuf
     let home = get_home_dir();
 
     // Determine max widths for columns based on uncolored strings
-    let mut max_dir_len = "DIRECTORY".len();
-    let mut max_item_len = "ITEM".len();
+    let mut max_dir_len = HEADER_DIRECTORY.len();
+    let mut max_item_len = HEADER_ITEM.len();
 
     // Collect all rows as plain strings first to calculate accurate column widths
     let mut rows: Vec<(String, String, String)> = Vec::new();
@@ -107,7 +115,7 @@ fn print_grouped_paths(paths_by_dir: &collections::BTreeMap<PathBuf, Vec<PathBuf
     for (dir, files) in paths_by_dir.iter() {
         let display_dir_cow = display_path_relative_to_home(dir, &home);
         let display_dir_str = if display_dir_cow.as_os_str().is_empty() {
-            ".".to_string() // Represent empty path as '.' for display
+            EMPTY_DIR_DOT.to_string() // Represent empty path as '.' for display
         } else {
             display_dir_cow.display().to_string()
         };
@@ -118,7 +126,7 @@ fn print_grouped_paths(paths_by_dir: &collections::BTreeMap<PathBuf, Vec<PathBuf
             let item_name_str = item_name_cow.to_string();
             max_item_len = max_item_len.max(item_name_str.len());
 
-            let item_type = if file.is_dir() { "Dir" } else { "File" };
+            let item_type = if file.is_dir() { TYPE_DIR } else { TYPE_FILE };
             rows.push((
                 display_dir_str.clone(),
                 item_name_str,
@@ -130,9 +138,9 @@ fn print_grouped_paths(paths_by_dir: &collections::BTreeMap<PathBuf, Vec<PathBuf
     // Print Headers
     println!(
         "{:<width_dir$} {:<width_item$} {:<4}",
-        "DIRECTORY".bold(),
-        "ITEM".bold(),
-        "TYPE".bold(),
+        HEADER_DIRECTORY.bold(),
+        HEADER_ITEM.bold(),
+        HEADER_TYPE.bold(),
         width_dir = max_dir_len,
         width_item = max_item_len,
     );

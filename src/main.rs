@@ -4,7 +4,7 @@ pub mod error;
 pub mod utils;
 
 use crate::app::{Shelf, run_app};
-use crate::config::init_dots_repo;
+use crate::config::init_bare_repo;
 use anyhow::Result;
 use clap::Parser;
 use colored::Colorize;
@@ -55,7 +55,7 @@ async fn main() -> Result<()> {
     colored::control::set_override(true);
 
     let user_directive = Shelf::parse();
-    let config_nexus = init_dots_repo()?;
+    let config_nexus = init_bare_repo()?;
 
     if let Err(operation_fizzle) = run_app(user_directive, config_nexus).await {
         eprintln!("Error: {}", operation_fizzle.to_string().red());

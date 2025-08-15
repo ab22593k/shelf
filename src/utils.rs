@@ -7,6 +7,11 @@ use indicatif::{ProgressBar, ProgressStyle};
 
 use crate::error::ShelfError;
 
+// ---------- Module-level constants (spinner UI) ----------
+const SPINNER_TICK_CHARS: &str = "⠁⠂⠄⡀⢀⠠⠐⠈";
+const SPINNER_TEMPLATE: &str = "{spinner} Forging commit narrative...";
+const SPINNER_TICK_MS: u64 = 120;
+
 pub async fn spin_progress<Op, Fut, Res>(operation: Op) -> Result<Res>
 where
     Op: FnOnce() -> Fut,
@@ -15,10 +20,10 @@ where
     let progress_wheel = ProgressBar::new_spinner();
     progress_wheel.set_style(
         ProgressStyle::default_spinner()
-            .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈")
-            .template("{spinner} Forging commit narrative...")?,
+            .tick_chars(SPINNER_TICK_CHARS)
+            .template(SPINNER_TEMPLATE)?,
     );
-    progress_wheel.enable_steady_tick(Duration::from_millis(120));
+    progress_wheel.enable_steady_tick(Duration::from_millis(SPINNER_TICK_MS));
 
     let outcome = operation().await?;
     progress_wheel.finish_and_clear();

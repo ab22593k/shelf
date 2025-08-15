@@ -8,16 +8,17 @@ pub(super) enum UserAction {
     Cancelled,
 }
 
+const PROMPT: &str = "What would you like to do next?";
+const OPTION_REGENERATE: &str = "Regenerate message";
+const OPTION_EDIT: &str = "Edit with Editor";
+const OPTION_COMMIT: &str = "Commit changes";
+const OPTION_QUIT: &str = "Quit";
+
 pub(super) fn user_selection() -> Result<UserAction> {
     use dialoguer::{Select, theme::ColorfulTheme};
-    let options = vec![
-        "Regenerate message",
-        "Edit with Editor",
-        "Commit changes",
-        "Quit",
-    ];
+    let options = vec![OPTION_REGENERATE, OPTION_EDIT, OPTION_COMMIT, OPTION_QUIT];
     let selection = Select::with_theme(&ColorfulTheme::default())
-        .with_prompt("What would you like to do next?")
+        .with_prompt(PROMPT)
         .default(0)
         .items(&options)
         .interact();
