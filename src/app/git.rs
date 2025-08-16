@@ -79,7 +79,7 @@ pub fn commit_history(
         match commit_id {
             Ok(oid) => match repository.find_commit(oid) {
                 Ok(commit) => {
-                    if !should_escape_commit(&commit, evade_patterns) {
+                    if !should_skip_commit(&commit, evade_patterns) {
                         saga_chapters.push((oid, commit.message().unwrap_or_default().to_string()));
                     }
                 }
@@ -95,18 +95,12 @@ pub fn commit_history(
     Ok(saga_chapters)
 }
 
-fn should_escape_commit(commit: &Commit, escape_patterns: Option<&[&str]>) -> bool {
-    if let (Some(patterns), Ok(file_tree)) = (escape_patterns, commit.tree()) {
-        for pattern in patterns {
-            if file_tree.iter().any(|entry| {
-                entry
-                    .name()
-                    .map(|name| name.contains(pattern))
-                    .unwrap_or(false)
-            }) {
-                return true;
-            }
-        }
+fn should_skip_commit(commit: &Commit, escape_patterns: Option<&[&str]>) -> bool {
+    match (escape_patterns, commit.tree()) {
+        (Some(patterns), Ok(tree)) => patterns.iter().any(|pattern| {
+            tree.iter()
+                .any(|entry| entry.name().is_some_and(|name| name.contains(pattern)))
+        }),
+        _ => false,
     }
-    false
 }

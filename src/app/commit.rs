@@ -29,20 +29,16 @@ const EDITOR_ENV_VARS: [&str; 3] = ["GIT_EDITOR", "EDITOR", "VISUAL"];
 pub struct CommitCommand {
     /// Prefix to prepend to the generated commit message
     #[arg(long, default_value = "")]
-    pub prefix: String,
-
+    pub prefix: Option<String>,
     /// AI model provider to use for generation
     #[arg(short, long, default_value = "gemini")]
     pub provider: String,
-
     /// Specific model to use for commit message generation
     #[arg(short, long, default_value = "gemini-2.5-flash-lite")]
     pub model: String,
-
     /// Number of previous commits to include as context
     #[arg(long, short = 'd', default_value = "10")]
     pub history_depth: usize,
-
     /// File patterns to ignore when generating commits (comma-separated)
     #[arg(short, long, default_value = None, value_delimiter = ',', num_args = 1..)]
     pub ignored: Option<Vec<String>>,
@@ -55,7 +51,7 @@ pub async fn run(args: CommitCommand) -> Result<()> {
 
 /// Configuration context for commit message generation
 struct CommitConfig<'a> {
-    prefix: &'a str,
+    prefix: Option<&'a str>,
     provider: &'a str,
     model: &'a str,
     history_depth: &'a usize,
@@ -65,7 +61,7 @@ struct CommitConfig<'a> {
 impl<'a> From<&'a CommitCommand> for CommitConfig<'a> {
     fn from(cmd: &'a CommitCommand) -> Self {
         Self {
-            prefix: &cmd.prefix,
+            prefix: cmd.prefix.as_deref(),
             provider: &cmd.provider,
             model: &cmd.model,
             history_depth: &cmd.history_depth,
@@ -182,11 +178,11 @@ fn create_template_data(
     diff_content: &str,
     commit_history: &str,
 ) -> serde_json::Value {
-    let partial_commit_section = if config.prefix.is_empty() {
-        String::new()
-    } else {
-        format!("PARTIAL_COMMIT_MESSAGE:\n```\n{}```\n", config.prefix)
-    };
+    let partial_commit_section = config
+        .prefix
+        .filter(|p| !p.is_empty())
+        .map(|p| format!("PARTIAL_COMMIT_MESSAGE:\n```\n{}```\n", p))
+        .unwrap_or_default();
 
     json!({
         "CODE_CHANGES": format!("```diff\n{diff_content}\n```"),
