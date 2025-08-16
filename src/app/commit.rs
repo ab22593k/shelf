@@ -4,7 +4,7 @@ use colored::Colorize;
 use handlebars::Handlebars;
 use rig::client::builder::DynClientBuilder;
 use rig::completion::Prompt;
-use rig::providers::gemini::completion::gemini_api_types::{self, Part};
+use rig::providers::gemini::completion::gemini_api_types::{self};
 use serde_json::json;
 use std::io::Write;
 use std::process::Command;
@@ -154,8 +154,8 @@ fn extract_text_from_gemini_response(
         .candidates
         .first()
         .map(|candidate| candidate.content.parts.first())
-        .and_then(|part| match part {
-            Part::Text(text) => Some(text.clone()),
+        .and_then(|part| match &part.part {
+            gemini_api_types::PartKind::Text(text) => Some(text.clone()),
             _ => None,
         })
         .unwrap_or_else(|| "No commit message generated".to_string())

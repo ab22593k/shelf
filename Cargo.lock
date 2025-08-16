@@ -1621,9 +1621,9 @@ dependencies = [
 
 [[package]]
 name = "rig-core"
-version = "0.16.0"
+version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ef153d62811728733f5cf5299a0149ce5cf1aa3a7ec1043b3f496a92c6873bc5"
+checksum = "e57d16b6bc8ed1a4d7cea51782f1c6320e0a98b01a8de719540251a81b027ffb"
 dependencies = [
  "as-any",
  "async-stream",
@@ -1639,6 +1639,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.12",
  "tracing",
+ "url",
 ]
 
 [[package]]
