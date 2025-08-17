@@ -2,7 +2,7 @@ use std::path::{self, PathBuf};
 use thiserror::Error;
 
 #[derive(Error, Debug)]
-pub enum ShelfError {
+pub enum Shelfor {
     #[error("Home directory not found")]
     HomeDirectoryNotFound,
     #[error("Path not found: {0:?}")]

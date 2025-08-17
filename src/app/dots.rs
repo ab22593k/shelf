@@ -1,17 +1,14 @@
 use anyhow::Result;
+use anyhow::anyhow;
 use clap::{Args, Subcommand};
 use colored::Colorize;
+use git2::{Index, Repository, Statuses};
 use std::path::{Path, PathBuf};
 use std::{borrow::Cow, collections};
 use tracing::debug;
 
-use anyhow::anyhow;
-use git2::{Index, Repository, Statuses};
-
-use crate::{
-    error::ShelfError,
-    utils::{shine_success, verify_git_presence},
-};
+use crate::app::git::verify_git_installation;
+use crate::{error::Shelfor, utils::shine_success};
 
 const HEADER_DIRECTORY: &str = "DIRECTORY";
 const HEADER_ITEM: &str = "ITEM";
@@ -180,7 +177,7 @@ pub struct Dots {
 
 impl Dots {
     pub fn new(git_dir: PathBuf, work_tree: PathBuf) -> Result<Self> {
-        verify_git_presence()?;
+        verify_git_installation()?;
 
         let repo = match Repository::open_bare(&git_dir) {
             Ok(repo) => repo,
@@ -428,8 +425,8 @@ impl Dots {
     }
 
     /// Converts a git2::IndexEntry path to a PathBuf relative to the workdir.
-    fn index_entry_to_pathbuf(&self, entry: &git2::IndexEntry) -> Result<PathBuf, ShelfError> {
-        let path_str = std::str::from_utf8(&entry.path).map_err(|_| ShelfError::InvalidUtf8Path)?;
+    fn index_entry_to_pathbuf(&self, entry: &git2::IndexEntry) -> Result<PathBuf, Shelfor> {
+        let path_str = std::str::from_utf8(&entry.path).map_err(|_| Shelfor::InvalidUtf8Path)?;
         Ok(self.workdir()?.join(path_str))
     }
 
@@ -500,10 +497,10 @@ impl Dots {
     /// Validates a path before operations.
     fn validate_path(&self, path: &Path) -> Result<()> {
         if !path.exists() {
-            return Err(ShelfError::PathNotFound(path.to_path_buf()).into());
+            return Err(Shelfor::PathNotFound(path.to_path_buf()).into());
         }
         if !path.starts_with(self.workdir()?) {
-            return Err(ShelfError::OutsideWorkTree(path.to_path_buf()).into());
+            return Err(Shelfor::OutsideWorkTree(path.to_path_buf()).into());
         }
         Ok(())
     }
@@ -538,22 +535,22 @@ impl Dots {
 
     /// Retrieves the repository index.
     fn get_index(&self) -> Result<Index> {
-        Ok(self.bare.index().map_err(ShelfError::Git)?)
+        Ok(self.bare.index().map_err(Shelfor::Git)?)
     }
 
     /// Writes the index to disk.
     fn write_index(&self, index: &mut Index) -> Result<()> {
-        index.write().map_err(ShelfError::Git)?;
+        index.write().map_err(Shelfor::Git)?;
         Ok(())
     }
 
     /// Gets the working directory of the repository.
-    fn workdir(&self) -> Result<&Path, ShelfError> {
-        self.bare.workdir().ok_or(ShelfError::GitNotInstalled)
+    fn workdir(&self) -> Result<&Path, Shelfor> {
+        self.bare.workdir().ok_or(Shelfor::GitNotInstalled)
     }
 
     /// Computes the relative path from the working directory.
-    fn get_relative_path<'a>(&self, path: &'a Path) -> Result<&'a Path, ShelfError> {
+    fn get_relative_path<'a>(&self, path: &'a Path) -> Result<&'a Path, Shelfor> {
         Ok(path.strip_prefix(self.workdir()?)?)
     }
 
@@ -623,6 +620,9 @@ pub enum ListFilter {
 
 #[cfg(test)]
 mod tests {
+
+    use crate::app::git::verify_git_installation;
+
     use super::*;
     #[cfg(unix)]
     use std::os::unix::fs::symlink;
@@ -728,13 +728,13 @@ mod tests {
 
         // SAFETY: Test environment should run without concurrent access
         unsafe { env::set_var("PATH", "") }
-        let err = verify_git_presence().unwrap_err();
-        assert!(matches!(err, ShelfError::GitNotInstalled));
+        let err = verify_git_installation().unwrap_err();
+        assert!(matches!(err, Shelfor::GitNotInstalled));
 
         // SAFETY: Test environment should run without concurrent access
         // Restoring original PATH value
         unsafe { env::set_var("PATH", original_path.unwrap_or_default()) }
-        assert!(verify_git_presence().is_ok());
+        assert!(verify_git_installation().is_ok());
 
         Ok(())
     }
@@ -795,8 +795,8 @@ mod tests {
         let missing = env.workdir().join("ghost.txt");
         let err = env.manager.track(&[missing]).unwrap_err();
         assert!(matches!(
-            err.downcast_ref::<ShelfError>(),
-            Some(ShelfError::PathNotFound(_))
+            err.downcast_ref::<Shelfor>(),
+            Some(Shelfor::PathNotFound(_))
         ));
 
         // External path
@@ -807,8 +807,8 @@ mod tests {
         };
         let err = env.manager.track(&[external]).unwrap_err();
         assert!(matches!(
-            err.downcast_ref::<ShelfError>(),
-            Some(ShelfError::OutsideWorkTree(_))
+            err.downcast_ref::<Shelfor>(),
+            Some(Shelfor::OutsideWorkTree(_))
         ));
 
         Ok(())

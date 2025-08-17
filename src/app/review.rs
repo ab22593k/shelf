@@ -1,4 +1,4 @@
-use crate::utils::{harvest_staged_changes, spin_progress};
+use crate::{app::git::collect_changes, utils::spin_progress};
 use anyhow::{Context, Result, anyhow};
 use clap::Args;
 use handlebars::Handlebars;
@@ -6,9 +6,8 @@ use rig::{client::builder::DynClientBuilder, completion::Prompt};
 use serde_json::json;
 use std::path::Path;
 
-const REVIEW_TEMPLATE_PATH: &str = "assets/assistant_review_prompt.hbs";
+const REVIEW_TEMPLATE_PATH: &str = "assets/prompts/comprehensive_review.hbs";
 const AI_TEMPERATURE: f64 = 0.2;
-const AI_MAX_TOKENS: u64 = 200;
 
 const PREAMBLE: &str = r"You are a **Senior Rust Software Architect** and an **expert Code Reviewer**. Your primary mission is to meticulously analyze provided Git diffs (code changes) for software quality, security, and adherence to best practices, then offer highly actionable and insightful feedback.";
 
@@ -18,7 +17,7 @@ pub struct ReviewCommand {
     #[arg(short, long, default_value = "gemini")]
     pub provider: String,
     /// Override the configured model.
-    #[arg(short, long, default_value = "gemini-2.0-flash")]
+    #[arg(short, long, default_value = "gemini-2.5-flash")]
     pub model: String,
 }
 
@@ -30,10 +29,10 @@ pub(super) async fn run(args: ReviewCommand) -> Result<()> {
 
 /// Orchestrates the code review process.
 async fn review_action(args: ReviewCommand) -> Result<String> {
-    let diff = harvest_staged_changes().context("Failed to get staged changes")?;
+    let diff = collect_changes().context("Failed to get staged changes")?;
     let template = load_review_template()?;
-    let prompt = build_main_prompt(&template, &diff)?;
-    request_ai_review(prompt, &args).await
+    let prompt = build_review_prompt(&template, &diff)?;
+    request_review(prompt, &args).await
 }
 
 /// Loads the review prompt template from the primary path or a fallback configuration directory.
@@ -62,7 +61,7 @@ fn load_review_template() -> Result<String> {
 }
 
 /// Renders the main prompt using the provided template and code changes.
-fn build_main_prompt(template_str: &str, diff: &str) -> Result<String> {
+fn build_review_prompt(template_str: &str, diff: &str) -> Result<String> {
     let mut handlebars = Handlebars::new();
     handlebars.register_escape_fn(handlebars::no_escape);
 
@@ -74,13 +73,12 @@ fn build_main_prompt(template_str: &str, diff: &str) -> Result<String> {
 }
 
 /// Requests a code review from the AI agent.
-async fn request_ai_review(prompt: String, args: &ReviewCommand) -> Result<String> {
+async fn request_review(prompt: String, args: &ReviewCommand) -> Result<String> {
     let client = DynClientBuilder::new();
     let agent = client
         .agent(&args.provider, &args.model)?
         .preamble(PREAMBLE)
         .temperature(AI_TEMPERATURE)
-        .max_tokens(AI_MAX_TOKENS)
         .build();
 
     spin_progress(|| async { agent.prompt(prompt).await.map_err(anyhow::Error::from) }).await

@@ -10,9 +10,8 @@ use std::io::Write;
 use std::process::Command;
 use tempfile::NamedTempFile;
 
-use crate::app::git::{commit_action, commit_history};
+use crate::app::git::{collect_changes, commit_action, commit_history};
 use crate::app::ui::{UserAction, user_selection};
-use crate::utils::harvest_staged_changes;
 
 const COMMIT_TEMPLATE_PATH: &str = "assets/prompts/commit_message_completion.hbs";
 const PREAMBLE_TEMPLATE_PATH: &str = "assets/prompts/assistant_commit_preamble.hbs";
@@ -117,7 +116,7 @@ async fn generate_commit_message(config: &CommitConfig<'_>) -> Result<String> {
 
 /// Request commit message suggestion from AI model
 async fn request_commit_suggestion(config: &CommitConfig<'_>) -> Result<String> {
-    let diff_content = harvest_staged_changes().context("Failed to retrieve staged changes")?;
+    let diff_content = collect_changes().context("Failed to retrieve staged changes")?;
 
     validate_diff_content(&diff_content)?;
 
@@ -181,7 +180,7 @@ fn create_template_data(
     let partial_commit_section = config
         .prefix
         .filter(|p| !p.is_empty())
-        .map(|p| format!("PARTIAL_COMMIT_MESSAGE:\n```\n{}```\n", p))
+        .map(|p| format!("PARTIAL_COMMIT_MESSAGE:\n```\n{p}```\n"))
         .unwrap_or_default();
 
     json!({
