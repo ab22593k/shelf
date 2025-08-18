@@ -3,13 +3,13 @@ use clap::{Args, CommandFactory};
 use clap_complete::{Generator, Shell, generate};
 
 #[derive(Args)]
-pub struct CompletionCommand {
+pub struct CompletionCMD {
     /// The shell to generate completions for.
     #[arg(value_enum)]
     pub shell: Shell,
 }
 
-pub async fn run(args: CompletionCommand) -> Result<()> {
+pub async fn run(args: CompletionCMD) -> Result<()> {
     let mut cmd = super::Shelf::command();
     let script = gen_completions(args.shell, &mut cmd).context("Printing completions failed")?;
     println!("{script}");

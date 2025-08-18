@@ -1,42 +1,44 @@
+pub(super) mod dots;
+
+mod commit;
+mod completion;
+mod prompt;
+mod review;
+
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
 use crate::app::dots::Dots;
-
-mod commit;
-mod completion;
-mod git;
-mod review;
-mod ui;
-
-pub mod dots;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 #[command(propagate_version = true)]
 pub struct Shelf {
     #[command(subcommand)]
-    pub command: Commands,
+    pub command: Claps,
 }
 
 #[derive(Subcommand)]
-pub enum Commands {
+pub enum Claps {
     /// Manage system configuration files.
-    Dots(dots::DotsCommand),
+    Dots(dots::DotsCMD),
     /// Generate a commit message using AI or manage git hooks.
-    Commit(commit::CommitCommand),
+    Commit(commit::CommitCMD),
     /// Review code changes and suggest improvements using AI.
-    Review(review::ReviewCommand),
+    Review(review::ReviewCMD),
+    /// Text based prompt and repository context.
+    Prompt(prompt::PromptCMD),
     /// Generate shell completion scripts.
-    Completion(completion::CompletionCommand),
+    Completion(completion::CompletionCMD),
 }
 
 pub async fn run_app(cli: Shelf, repo: Dots) -> Result<()> {
     match cli.command {
-        Commands::Dots(args) => dots::run(args, repo).await?,
-        Commands::Commit(args) => commit::run(args).await?,
-        Commands::Review(args) => review::run(args).await?,
-        Commands::Completion(args) => completion::run(args).await?,
+        Claps::Dots(args) => dots::run(args, repo).await?,
+        Claps::Commit(args) => commit::run(args).await?,
+        Claps::Review(args) => review::run(args).await?,
+        Claps::Prompt(args) => prompt::run(args).await?,
+        Claps::Completion(args) => completion::run(args).await?,
     }
     Ok(())
 }

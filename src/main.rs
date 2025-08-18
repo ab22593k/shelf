@@ -1,7 +1,9 @@
-pub mod app;
-pub mod config;
-pub mod error;
-pub mod utils;
+mod app;
+mod config;
+mod error;
+mod git;
+mod ui;
+mod utils;
 
 use crate::app::{Shelf, run_app};
 use crate::config::init_bare_repo;

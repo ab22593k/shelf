@@ -106,7 +106,7 @@ fn should_exclude_commit(commit: &Commit, exclude_patterns: Option<&[&str]>) -> 
 
     patterns.iter().any(|pattern| {
         tree.iter()
-            .any(|entry| entry.name().map_or(false, |name| name.contains(pattern)))
+            .any(|entry| entry.name().is_some_and(|name| name.contains(pattern)))
     })
 }
 

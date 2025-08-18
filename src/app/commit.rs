@@ -4,17 +4,18 @@ use colored::Colorize;
 use handlebars::Handlebars;
 use rig::client::builder::DynClientBuilder;
 use rig::completion::Prompt;
+use rig::providers::gemini::completion;
 use rig::providers::gemini::completion::gemini_api_types::{self};
 use serde_json::json;
 use std::io::Write;
 use std::process::Command;
 use tempfile::NamedTempFile;
 
-use crate::app::git::{collect_changes, commit_action, commit_history};
-use crate::app::ui::{UserAction, user_selection};
+use crate::git::{collect_changes, commit_action, commit_history};
+use crate::ui::{UserAction, user_selection};
 
-const COMMIT_TEMPLATE_PATH: &str = "assets/prompts/commit_message_completion.hbs";
-const PREAMBLE_TEMPLATE_PATH: &str = "assets/prompts/assistant_commit_preamble.hbs";
+const COMMIT_TEMPLATE_PATH: &str = "assets/prompts/commit_completion.hbs";
+const PREAMBLE_TEMPLATE_PATH: &str = "assets/prompts/commit_preamble.hbs";
 
 const PROPOSED_HEADER: &str = "Proposed Commit Message:";
 const CANCELLED_TEXT: &str = "Operation cancelled.";
@@ -25,7 +26,7 @@ const AI_MAX_TOKENS: u64 = 200;
 const EDITOR_ENV_VARS: [&str; 3] = ["GIT_EDITOR", "EDITOR", "VISUAL"];
 
 #[derive(Args)]
-pub struct CommitCommand {
+pub struct CommitCMD {
     /// Prefix to prepend to the generated commit message
     #[arg(long, default_value = "")]
     pub prefix: Option<String>,
@@ -43,7 +44,7 @@ pub struct CommitCommand {
     pub ignored: Option<Vec<String>>,
 }
 
-pub async fn run(args: CommitCommand) -> Result<()> {
+pub async fn run(args: CommitCMD) -> Result<()> {
     let config = CommitConfig::from(&args);
     execute_commit_workflow(&config).await
 }
@@ -57,8 +58,8 @@ struct CommitConfig<'a> {
     ignored_patterns: &'a Option<Vec<String>>,
 }
 
-impl<'a> From<&'a CommitCommand> for CommitConfig<'a> {
-    fn from(cmd: &'a CommitCommand) -> Self {
+impl<'a> From<&'a CommitCMD> for CommitConfig<'a> {
+    fn from(cmd: &'a CommitCMD) -> Self {
         Self {
             prefix: cmd.prefix.as_deref(),
             provider: &cmd.provider,
@@ -143,7 +144,7 @@ fn create_client(config: &CommitConfig<'_>) -> Result<impl Prompt> {
 
 /// Extract text content from Gemini API response
 fn extract_text_from_gemini_response(
-    response: &gemini_api_types::GenerateContentResponse,
+    response: &completion::gemini_api_types::GenerateContentResponse,
 ) -> String {
     response
         .candidates

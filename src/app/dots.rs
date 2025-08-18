@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::{borrow::Cow, collections};
 use tracing::debug;
 
-use crate::app::git::verify_git_installation;
+use crate::git::verify_git_installation;
 use crate::{error::Shelfor, utils::shine_success};
 
 const HEADER_DIRECTORY: &str = "DIRECTORY";
@@ -19,7 +19,7 @@ const TYPE_FILE: &str = "File";
 const SAVE_SUCCESS: &str = "DotFs saved successfully";
 
 #[derive(Args)]
-pub struct DotsCommand {
+pub struct DotsCMD {
     #[command(subcommand)]
     action: FileAction,
 }
@@ -46,7 +46,7 @@ pub enum FileAction {
     Save,
 }
 
-pub async fn run(args: DotsCommand, mut repo: Dots) -> Result<()> {
+pub async fn run(args: DotsCMD, mut repo: Dots) -> Result<()> {
     match args.action {
         FileAction::Track { paths } => {
             repo.track(&paths)?;
@@ -273,149 +273,6 @@ impl Dots {
         )?)
     }
 
-    /// Handles the creation or update of a Git remote reference.
-    fn handle_remote_creation_or_update(
-        &mut self,
-        remote_name: &str,
-        remote_url: &str,
-    ) -> Result<()> {
-        match self.bare.find_remote(remote_name) {
-            Ok(_) => {
-                debug!(
-                    "Remote {} already exists, updating URL to {}",
-                    remote_name, remote_url
-                );
-                self.bare.remote_set_url(remote_name, remote_url)?;
-            }
-            Err(_) => {
-                debug!("Creating new remote: {} -> {}", remote_name, remote_url);
-                let remote = self.bare.remote(remote_name, remote_url)?;
-                debug!("Remote created with URL: {:?}", remote.url());
-            }
-        }
-        Ok(())
-    }
-
-    /// Adds a Git remote reference to the repository.
-    ///
-    /// # Arguments
-    ///
-    /// * `remote_name` - The name of the remote to add (e.g. "origin")
-    /// * `url` - The URL of the remote repository
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(remote_name)` if the remote was added successfully
-    /// * `Err(AppError::Git)` if there was an error creating the remote
-    pub fn add_remote(&mut self, name: impl AsRef<str>, url: impl AsRef<str>) -> Result<String> {
-        let remote_name = name.as_ref().to_string();
-        let remote_url = url.as_ref();
-
-        debug!("Adding remote: {} -> {}", remote_name, remote_url);
-        self.handle_remote_creation_or_update(&remote_name, remote_url)?;
-        Ok(remote_name)
-    }
-
-    /// Generates platform-specific SSH key paths.
-    fn get_ssh_key_paths(username_from_url: Option<&str>) -> Vec<PathBuf> {
-        let mut paths = Vec::new();
-
-        if cfg!(windows) {
-            if let Some(user_dirs) = directories::UserDirs::new() {
-                let ssh_dir = user_dirs.home_dir().join(".ssh");
-                paths.push(ssh_dir.join("id_rsa"));
-                paths.push(ssh_dir.join("id_ed25519"));
-            }
-        } else {
-            let user = username_from_url.unwrap_or("git");
-            paths.push(PathBuf::from("/home").join(user).join(".ssh/id_rsa"));
-            paths.push(PathBuf::from("/home").join(user).join(".ssh/id_ed25519"));
-
-            // Add common global SSH key paths for Unix-like systems, if applicable
-            // For example:
-            // paths.push(PathBuf::from("/etc/ssh/ssh_host_rsa_key"));
-            // paths.push(PathBuf::from("/etc/ssh/ssh_host_ed25519_key"));
-        }
-        paths.into_iter().filter(|p| p.exists()).collect()
-    }
-
-    /// Tries to authenticate using SSH keys found at common locations.
-    fn try_ssh_key_auth(username_from_url: Option<&str>) -> Result<git2::Cred, git2::Error> {
-        let ssh_key_paths = Dots::get_ssh_key_paths(username_from_url);
-
-        for key_path in ssh_key_paths {
-            if let Ok(cred) = git2::Cred::ssh_key(
-                username_from_url.unwrap_or("git"),
-                None, // Public key path, usually not needed if private key is sufficient
-                &key_path,
-                None, // Passphrase
-            ) {
-                return Ok(cred);
-            }
-        }
-        Err(git2::Error::from_str("No SSH keys found"))
-    }
-
-    /// Tries to authenticate using credentials from environment variables.
-    fn try_env_var_auth() -> Result<git2::Cred, git2::Error> {
-        if let (Ok(user), Ok(pass)) = (std::env::var("GIT_USERNAME"), std::env::var("GIT_PASSWORD"))
-        {
-            git2::Cred::userpass_plaintext(&user, &pass)
-        } else if let Ok(token) = std::env::var("GITHUB_TOKEN") {
-            git2::Cred::userpass_plaintext("git", &token)
-        } else {
-            Err(git2::Error::from_str(
-                "No Git credentials found in environment variables. Set GIT_USERNAME and GIT_PASSWORD, or GITHUB_TOKEN",
-            ))
-        }
-    }
-
-    /// Provides Git credential callbacks for push operations.
-    fn get_auth_credentials(&self) -> git2::RemoteCallbacks<'_> {
-        let mut callbacks = git2::RemoteCallbacks::new();
-        callbacks.credentials(|_url, username_from_url, allowed_types| {
-            if allowed_types.contains(git2::CredentialType::SSH_KEY) {
-                Dots::try_ssh_key_auth(username_from_url)
-            } else if allowed_types.contains(git2::CredentialType::USER_PASS_PLAINTEXT) {
-                Dots::try_env_var_auth()
-            } else {
-                Err(git2::Error::from_str("No supported authentication methods found. Configure SSH keys or set Git credentials in environment variables"))
-            }
-        });
-        callbacks
-    }
-
-    /// Pushes the bare repository to a remote
-    ///
-    /// # Arguments
-    ///
-    /// * `remote` - Name of the remote to push to (e.g. "origin")
-    /// * `branch` - Name of the branch to push (e.g. "master", "main")
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(())` if the push was successful
-    /// * `Err(AppError::Git)` if there was an error during push
-    pub fn push(&self, remote: impl AsRef<str>, branch: impl AsRef<str>) -> Result<()> {
-        let remote_name = remote.as_ref();
-        let branch_name = branch.as_ref();
-
-        debug!("Pushing to remote {remote_name} branch {branch_name}");
-
-        let mut remote = self.bare.find_remote(remote_name)?;
-        let refspec = format!("refs/heads/{branch_name}");
-
-        let callbacks = self.get_auth_credentials();
-
-        let mut push_opts = git2::PushOptions::new();
-        push_opts.remote_callbacks(callbacks);
-
-        remote.push(&[&refspec], Some(&mut push_opts))?;
-
-        debug!("Successfully pushed to {}:{}", remote_name, branch_name);
-        Ok(())
-    }
-
     /// Sets the filter for listing files and resets the iterator.
     pub fn set_filter(&mut self, filter: ListFilter) {
         if self.filter != filter {
@@ -621,7 +478,7 @@ pub enum ListFilter {
 #[cfg(test)]
 mod tests {
 
-    use crate::app::git::verify_git_installation;
+    use crate::git::verify_git_installation;
 
     use super::*;
     #[cfg(unix)]

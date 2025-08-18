@@ -1,4 +1,4 @@
-use crate::{app::git::collect_changes, utils::spin_progress};
+use crate::{git::collect_changes, utils::spin_progress};
 use anyhow::{Context, Result, anyhow};
 use clap::Args;
 use handlebars::Handlebars;
@@ -12,7 +12,7 @@ const AI_TEMPERATURE: f64 = 0.2;
 const PREAMBLE: &str = r"You are a **Senior Rust Software Architect** and an **expert Code Reviewer**. Your primary mission is to meticulously analyze provided Git diffs (code changes) for software quality, security, and adherence to best practices, then offer highly actionable and insightful feedback.";
 
 #[derive(Args)]
-pub struct ReviewCommand {
+pub struct ReviewCMD {
     /// Override the configured provider.
     #[arg(short, long, default_value = "gemini")]
     pub provider: String,
@@ -21,14 +21,14 @@ pub struct ReviewCommand {
     pub model: String,
 }
 
-pub(super) async fn run(args: ReviewCommand) -> Result<()> {
+pub(super) async fn run(args: ReviewCMD) -> Result<()> {
     let reviews = review_action(args).await?;
     println!("{reviews}");
     Ok(())
 }
 
 /// Orchestrates the code review process.
-async fn review_action(args: ReviewCommand) -> Result<String> {
+async fn review_action(args: ReviewCMD) -> Result<String> {
     let diff = collect_changes().context("Failed to get staged changes")?;
     let template = load_review_template()?;
     let prompt = build_review_prompt(&template, &diff)?;
@@ -73,7 +73,7 @@ fn build_review_prompt(template_str: &str, diff: &str) -> Result<String> {
 }
 
 /// Requests a code review from the AI agent.
-async fn request_review(prompt: String, args: &ReviewCommand) -> Result<String> {
+async fn request_review(prompt: String, args: &ReviewCMD) -> Result<String> {
     let client = DynClientBuilder::new();
     let agent = client
         .agent(&args.provider, &args.model)?
