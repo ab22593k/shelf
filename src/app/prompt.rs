@@ -33,6 +33,10 @@ pub struct PromptCMD {
     /// Glob patterns for files to explicitly exclude. Can be repeated.
     #[arg(long, value_name = "GLOB")]
     exclude: Option<Vec<String>>,
+
+    /// Disable the printing of line numbers in the output file.
+    #[arg(long)]
+    no_line_numbers: bool,
 }
 
 /// A converter for GitHub repositories or local directories to an LLM-friendly text file.
@@ -300,34 +304,44 @@ impl RepoConverter {
         }
 
         // Helper function to print the tree structure
-        fn print_structure(node: &FileTreeNode, indent: usize, output: &mut String) {
-            match node {
-                FileTreeNode::Directory(children) => {
-                    for (name, child) in children {
-                        let prefix = "  ".repeat(indent);
-                        match child {
-                            FileTreeNode::Directory(_) => {
-                                output.push_str(&format!("{prefix}{name}/\n"));
-                                print_structure(child, indent + 1, output);
-                            }
-                            FileTreeNode::File(size) => {
-                                let size_str = if *size < 1024 {
-                                    format!("({size} bytes)")
+        fn print_structure(node: &FileTreeNode, prefix: &str, output: &mut String) {
+            if let FileTreeNode::Directory(children) = node {
+                let mut entries = children.iter().peekable();
+                while let Some((name, child)) = entries.next() {
+                    let connector = if entries.peek().is_some() {
+                        "├── "
+                    } else {
+                        "└── "
+                    };
+
+                    match child {
+                        FileTreeNode::Directory(_) => {
+                            output.push_str(&format!("{prefix}{connector}{name}/\n"));
+                            let new_prefix = format!(
+                                "{}{}",
+                                prefix,
+                                if entries.peek().is_some() {
+                                    "│   "
                                 } else {
-                                    format!("({}KB)", size / 1024)
-                                };
-                                output.push_str(&format!("{prefix}{name}{size_str}\n"));
-                            }
+                                    "    "
+                                }
+                            );
+                            print_structure(child, &new_prefix, output);
+                        }
+                        FileTreeNode::File(size) => {
+                            let size_str = if *size < 1024 {
+                                format!("({} bytes)", size)
+                            } else {
+                                format!("({}KB)", size / 1024)
+                            };
+                            output.push_str(&format!("{prefix}{connector}{name} {size_str}\n"));
                         }
                     }
-                }
-                FileTreeNode::File(_) => {
-                    // Nothing to print at this level
                 }
             }
         }
 
-        print_structure(&root, 0, &mut output);
+        print_structure(&root, "", &mut output);
         output.push('\n');
 
         // --- File Contents ---
@@ -345,8 +359,13 @@ impl RepoConverter {
 
             match fs::read_to_string(file_path) {
                 Ok(content) => {
-                    for (i, line) in content.lines().enumerate() {
-                        output.push_str(&format!("{:4}: {}\n", i + 1, line));
+                    if self.args.no_line_numbers {
+                        output.push_str(&content);
+                        output.push('\n'); // Ensure trailing newline if missing
+                    } else {
+                        for (i, line) in content.lines().enumerate() {
+                            output.push_str(&format!("{:4}: {}\n", i + 1, line));
+                        }
                     }
                 }
                 Err(_) => {
@@ -492,6 +511,7 @@ mod tests {
             max_size: 1024,
             include: None,
             exclude: None,
+            no_line_numbers: false,
         };
         let converter = RepoConverter::new(args, Config::default());
         assert!(converter.should_skip_directory(Path::new("/project/.git")));
@@ -510,6 +530,7 @@ mod tests {
             max_size: 1024 * 1024, // 1MB max size
             include: None,
             exclude: None,
+            no_line_numbers: false,
         };
         let converter = RepoConverter::new(args, Config::default());
 
@@ -530,6 +551,7 @@ mod tests {
             max_size: 1024 * 1024,
             include: None,
             exclude: None,
+            no_line_numbers: false,
         };
         let converter = RepoConverter::new(args, Config::default());
 
@@ -547,6 +569,7 @@ mod tests {
             max_size: 1024 * 1024,
             include: None,
             exclude: None,
+            no_line_numbers: false,
         };
         let converter = RepoConverter::new(args, Config::default());
         let files = converter.collect_files(dir.path());
@@ -576,6 +599,7 @@ mod tests {
             max_size: 1024 * 1024,
             include: None,
             exclude: None,
+            no_line_numbers: false,
         };
         let converter = RepoConverter::new(args, Config::default());
         let files = converter.collect_files(dir.path());
@@ -587,8 +611,8 @@ mod tests {
         // Check structure view
         assert!(output.contains("REPOSITORY STRUCTURE:"));
         assert!(output.contains("main.rs"));
-        assert!(output.contains("src/"));
-        assert!(output.contains("  lib.rs"));
+        assert!(output.contains("└── src/"));
+        assert!(output.contains("    ├── lib.rs"));
 
         // Check file contents section
         assert!(output.contains("FILE CONTENTS:"));
@@ -608,6 +632,7 @@ mod tests {
             max_size: 1024 * 1024,
             include: None,
             exclude: None,
+            no_line_numbers: false,
         };
         let converter = RepoConverter::new(args, Config::default());
         let output_file_path = dir.path().join("output.txt");
