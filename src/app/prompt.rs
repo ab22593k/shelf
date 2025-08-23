@@ -1,6 +1,7 @@
 use anyhow::Result;
 use clap::Parser;
 use git2::Repository;
+use glob::Pattern;
 use std::collections::{BTreeMap, HashSet};
 use std::fs::{self, File};
 use std::io::{Read, Write};
@@ -24,12 +25,21 @@ pub struct PromptCMD {
     /// Maximum file size in bytes (default: 1MB)
     #[arg(long, default_value_t = 1024 * 1024)]
     max_size: u64,
+
+    /// Glob patterns for files to explicitly include. Can be repeated.
+    #[arg(long, value_name = "GLOB")]
+    include: Option<Vec<String>>,
+
+    /// Glob patterns for files to explicitly exclude. Can be repeated.
+    #[arg(long, value_name = "GLOB")]
+    exclude: Option<Vec<String>>,
 }
 
 /// A converter for GitHub repositories or local directories to an LLM-friendly text file.
 struct RepoConverter {
     max_file_size: u64,
     config: Config,
+    args: PromptCMD,
 }
 
 // An enum to represent our file system tree structure.
@@ -40,10 +50,11 @@ enum FileTreeNode {
 }
 
 impl RepoConverter {
-    fn new(max_file_size: u64, config: Config) -> Self {
+    fn new(args: PromptCMD, config: Config) -> Self {
         Self {
-            max_file_size,
+            max_file_size: args.max_size,
             config,
+            args,
         }
     }
 
@@ -179,21 +190,54 @@ impl RepoConverter {
 
     /// Collects all relevant files from a directory.
     fn collect_files(&self, repo_path: &Path) -> Vec<PathBuf> {
-        let mut files = Vec::new();
-        for entry in WalkDir::new(repo_path)
+        // 1. Initial collection with default skips
+        let initial_files: Vec<_> = WalkDir::new(repo_path)
             .into_iter()
             .filter_entry(|e| !self.should_skip_directory(e.path()))
             .filter_map(|e| e.ok())
-        {
-            if entry.file_type().is_file()
-                && !self.should_skip_file(entry.path())
-                && self.is_text_file(entry.path())
-            {
-                files.push(entry.into_path());
-            }
+            .filter(|e| {
+                e.file_type().is_file()
+                    && !self.should_skip_file(e.path())
+                    && self.is_text_file(e.path())
+            })
+            .map(|e| e.into_path())
+            .collect();
+
+        // 2. Apply --exclude patterns
+        let mut excluded_files = initial_files;
+        if let Some(exclude_patterns) = &self.args.exclude {
+            let globs: Vec<_> = exclude_patterns
+                .iter()
+                .filter_map(|p| Pattern::new(p).ok())
+                .collect();
+            excluded_files.retain(|path| {
+                !globs
+                    .iter()
+                    .any(|glob| glob.matches_path(path.strip_prefix(repo_path).unwrap_or(path)))
+            });
         }
-        files.sort();
-        files
+
+        // 3. Apply --include patterns if provided
+        let mut final_files = if let Some(include_patterns) = &self.args.include {
+            let globs: Vec<_> = include_patterns
+                .iter()
+                .filter_map(|p| Pattern::new(p).ok())
+                .collect();
+            excluded_files
+                .into_iter()
+                .filter(|path| {
+                    globs
+                        .iter()
+                        .any(|glob| glob.matches_path(path.strip_prefix(repo_path).unwrap_or(path)))
+                })
+                .collect()
+        } else {
+            excluded_files
+        };
+
+        // Sort for consistent output
+        final_files.sort();
+        final_files
     }
 
     /// Generates the LLM-friendly text output.
@@ -378,15 +422,12 @@ impl RepoConverter {
 
 pub async fn run(args: PromptCMD) -> Result<()> {
     // Load configuration from file
-    let config = match find_and_load_config() {
-        Ok(cfg) => cfg,
-        Err(e) => {
-            eprintln!("Warning: Could not load or parse shelf.toml: {e}. Using defaults.");
-            Config::default()
-        }
-    };
+    let config = find_and_load_config().unwrap_or_else(|e| {
+        eprintln!("Warning: Could not load or parse shelf.toml: {e}. Using defaults.");
+        Config::default()
+    });
 
-    let converter = RepoConverter::new(args.max_size, config);
+    let converter = RepoConverter::new(args.clone(), config);
     match converter.convert_repository(&args.repo_sources, args.output_file) {
         Ok(output_path) => {
             println!("\nConversion completed successfully!");
@@ -445,7 +486,14 @@ mod tests {
 
     #[test]
     fn test_should_skip_directory() {
-        let converter = RepoConverter::new(1024, Config::default());
+        let args = PromptCMD {
+            repo_sources: vec![],
+            output_file: None,
+            max_size: 1024,
+            include: None,
+            exclude: None,
+        };
+        let converter = RepoConverter::new(args, Config::default());
         assert!(converter.should_skip_directory(Path::new("/project/.git")));
         assert!(converter.should_skip_directory(Path::new("/project/node_modules")));
         assert!(converter.should_skip_directory(Path::new("/project/target")));
@@ -456,7 +504,14 @@ mod tests {
     #[test]
     fn test_should_skip_file() {
         let dir = setup_test_directory().unwrap();
-        let converter = RepoConverter::new(1024 * 1024, Config::default()); // 1MB max size
+        let args = PromptCMD {
+            repo_sources: vec![],
+            output_file: None,
+            max_size: 1024 * 1024, // 1MB max size
+            include: None,
+            exclude: None,
+        };
+        let converter = RepoConverter::new(args, Config::default());
 
         // Test skipping by name
         assert!(converter.should_skip_file(&dir.path().join(".gitignore")));
@@ -469,7 +524,14 @@ mod tests {
     #[test]
     fn test_is_text_file() {
         let dir = setup_test_directory().unwrap();
-        let converter = RepoConverter::new(1024 * 1024, Config::default());
+        let args = PromptCMD {
+            repo_sources: vec![],
+            output_file: None,
+            max_size: 1024 * 1024,
+            include: None,
+            exclude: None,
+        };
+        let converter = RepoConverter::new(args, Config::default());
 
         assert!(converter.is_text_file(&dir.path().join("README.md")));
         assert!(converter.is_text_file(&dir.path().join("main.rs")));
@@ -479,7 +541,14 @@ mod tests {
     #[test]
     fn test_collect_files() {
         let dir = setup_test_directory().unwrap();
-        let converter = RepoConverter::new(1024 * 1024, Config::default());
+        let args = PromptCMD {
+            repo_sources: vec![],
+            output_file: None,
+            max_size: 1024 * 1024,
+            include: None,
+            exclude: None,
+        };
+        let converter = RepoConverter::new(args, Config::default());
         let files = converter.collect_files(dir.path());
 
         let expected_files: HashSet<PathBuf> = [
@@ -501,7 +570,14 @@ mod tests {
     #[test]
     fn test_generate_llm_friendly_text() {
         let dir = setup_test_directory().unwrap();
-        let converter = RepoConverter::new(1024 * 1024, Config::default());
+        let args = PromptCMD {
+            repo_sources: vec![dir.path().to_str().unwrap().to_string()],
+            output_file: None,
+            max_size: 1024 * 1024,
+            include: None,
+            exclude: None,
+        };
+        let converter = RepoConverter::new(args, Config::default());
         let files = converter.collect_files(dir.path());
         let output = converter.generate_llm_friendly_text(dir.path(), &files, "test_repo");
 
@@ -526,7 +602,14 @@ mod tests {
     #[test]
     fn test_full_conversion_process_local() {
         let dir = setup_test_directory().unwrap();
-        let converter = RepoConverter::new(1024 * 1024, Config::default());
+        let args = PromptCMD {
+            repo_sources: vec![dir.path().to_str().unwrap().to_string()],
+            output_file: None,
+            max_size: 1024 * 1024,
+            include: None,
+            exclude: None,
+        };
+        let converter = RepoConverter::new(args, Config::default());
         let output_file_path = dir.path().join("output.txt");
 
         converter
