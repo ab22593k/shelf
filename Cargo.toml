@@ -33,6 +33,7 @@ reqwest = { version = "0.12.23" , features = ["json"] }
 schemars = "0.8.22"
 handlebars = "6.3.2"
 walkdir = "2.5.0"
+toml = "0.9.5"
 
 [dev-dependencies]
 mockito = "1.6.1"

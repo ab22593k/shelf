@@ -1,6 +1,7 @@
 use anyhow::Result;
 use clap::Parser;
 use git2::Repository;
+use serde::Deserialize;
 use std::collections::{BTreeMap, HashSet};
 use std::fs::{self, File};
 use std::io::{Read, Write};
@@ -8,7 +9,7 @@ use std::path::{Path, PathBuf};
 use tempfile::tempdir;
 use walkdir::WalkDir;
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Clone)]
 #[command(author, version, about, long_about = None)]
 pub struct PromptCMD {
     /// GitHub repository URL or local directory path
@@ -16,7 +17,7 @@ pub struct PromptCMD {
     repo_sources: Vec<String>,
 
     /// Output file path (optional)
-    #[arg(last(true))]
+    #[arg(short, long)]
     output_file: Option<String>,
 
     /// Maximum file size in bytes (default: 1MB)
@@ -24,9 +25,26 @@ pub struct PromptCMD {
     max_size: u64,
 }
 
+/// Configuration for the prompt generation, loaded from `shelf.toml`.
+#[derive(Deserialize, Default, Debug, Clone)]
+struct PromptConfig {
+    #[serde(default)]
+    skip_directories: Vec<String>,
+    #[serde(default)]
+    skip_files: Vec<String>,
+}
+
+/// Main configuration structure, mirroring `shelf.toml`.
+#[derive(Deserialize, Default, Debug, Clone)]
+struct Config {
+    #[serde(default)]
+    prompt: PromptConfig,
+}
+
 /// A converter for GitHub repositories or local directories to an LLM-friendly text file.
 struct RepoConverter {
     max_file_size: u64,
+    config: Config,
 }
 
 // An enum to represent our file system tree structure.
@@ -37,8 +55,11 @@ enum FileTreeNode {
 }
 
 impl RepoConverter {
-    fn new(max_file_size: u64) -> Self {
-        Self { max_file_size }
+    fn new(max_file_size: u64, config: Config) -> Self {
+        Self {
+            max_file_size,
+            config,
+        }
     }
 
     /// Clones a Git repository to a temporary directory.
@@ -50,7 +71,7 @@ impl RepoConverter {
 
     /// Checks if a file should be skipped based on its name or size.
     fn should_skip_file(&self, file_path: &Path) -> bool {
-        let skip_files: HashSet<&str> = [
+        let mut skip_files: HashSet<&str> = [
             ".gitignore",
             ".gitattributes",
             ".gitmodules",
@@ -76,6 +97,11 @@ impl RepoConverter {
         .cloned()
         .collect();
 
+        // Add custom patterns from config
+        for pattern in &self.config.prompt.skip_files {
+            skip_files.insert(pattern);
+        }
+
         if let Some(file_name) = file_path.file_name().and_then(|n| n.to_str())
             && skip_files.contains(file_name.to_lowercase().as_str())
         {
@@ -93,7 +119,7 @@ impl RepoConverter {
 
     /// Checks if a directory should be skipped.
     fn should_skip_directory(&self, dir_path: &Path) -> bool {
-        let skip_directories: HashSet<&str> = [
+        let mut skip_directories: HashSet<&str> = [
             ".git",
             ".svn",
             ".hg",
@@ -142,6 +168,10 @@ impl RepoConverter {
         .iter()
         .cloned()
         .collect();
+
+        for pattern in &self.config.prompt.skip_directories {
+            skip_directories.insert(pattern);
+        }
 
         if let Some(dir_name) = dir_path.file_name().and_then(|n| n.to_str()) {
             return skip_directories.contains(dir_name.to_lowercase().as_str());
@@ -361,9 +391,41 @@ impl RepoConverter {
     }
 }
 
-pub async fn run(args: PromptCMD) -> Result<()> {
-    let converter = RepoConverter::new(args.max_size);
+/// Searches for `shelf.toml` in the current directory and parent directories.
+fn find_and_load_config() -> Result<Config> {
+    let current_dir = std::env::current_dir()?;
+    for path in current_dir.ancestors() {
+        let config_path = path.join("shelf.toml");
+        if config_path.exists() {
+            println!("Loading config from: {}", config_path.display());
+            let content = fs::read_to_string(config_path)?;
+            return Ok(toml::from_str(&content)?);
+        }
+        let hidden_config_path = path.join(".shelf.toml");
+        if hidden_config_path.exists() {
+            println!("Loading config from: {}", hidden_config_path.display());
+            let content = fs::read_to_string(hidden_config_path)?;
+            return Ok(toml::from_str(&content)?);
+        }
+    }
 
+    Ok(Config::default()) // Return default config if no file is found
+}
+
+pub async fn run(args: PromptCMD) -> Result<()> {
+    // Load configuration from file
+    let config = match find_and_load_config() {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            eprintln!(
+                "Warning: Could not load or parse shelf.toml: {}. Using defaults.",
+                e
+            );
+            Config::default()
+        }
+    };
+
+    let converter = RepoConverter::new(args.max_size, config);
     match converter.convert_repository(&args.repo_sources, args.output_file) {
         Ok(output_path) => {
             println!("\nConversion completed successfully!");
@@ -422,7 +484,7 @@ mod tests {
 
     #[test]
     fn test_should_skip_directory() {
-        let converter = RepoConverter::new(1024);
+        let converter = RepoConverter::new(1024, Config::default());
         assert!(converter.should_skip_directory(Path::new("/project/.git")));
         assert!(converter.should_skip_directory(Path::new("/project/node_modules")));
         assert!(converter.should_skip_directory(Path::new("/project/target")));
@@ -433,7 +495,7 @@ mod tests {
     #[test]
     fn test_should_skip_file() {
         let dir = setup_test_directory().unwrap();
-        let converter = RepoConverter::new(1024 * 1024); // 1MB max size
+        let converter = RepoConverter::new(1024 * 1024, Config::default()); // 1MB max size
 
         // Test skipping by name
         assert!(converter.should_skip_file(&dir.path().join(".gitignore")));
@@ -446,7 +508,7 @@ mod tests {
     #[test]
     fn test_is_text_file() {
         let dir = setup_test_directory().unwrap();
-        let converter = RepoConverter::new(1024 * 1024);
+        let converter = RepoConverter::new(1024 * 1024, Config::default());
 
         assert!(converter.is_text_file(&dir.path().join("README.md")));
         assert!(converter.is_text_file(&dir.path().join("main.rs")));
@@ -456,7 +518,7 @@ mod tests {
     #[test]
     fn test_collect_files() {
         let dir = setup_test_directory().unwrap();
-        let converter = RepoConverter::new(1024 * 1024);
+        let converter = RepoConverter::new(1024 * 1024, Config::default());
         let files = converter.collect_files(dir.path());
 
         let expected_files: HashSet<PathBuf> = [
@@ -478,7 +540,7 @@ mod tests {
     #[test]
     fn test_generate_llm_friendly_text() {
         let dir = setup_test_directory().unwrap();
-        let converter = RepoConverter::new(1024 * 1024);
+        let converter = RepoConverter::new(1024 * 1024, Config::default());
         let files = converter.collect_files(dir.path());
         let output = converter.generate_llm_friendly_text(dir.path(), &files, "test_repo");
 
@@ -503,7 +565,7 @@ mod tests {
     #[test]
     fn test_full_conversion_process_local() {
         let dir = setup_test_directory().unwrap();
-        let converter = RepoConverter::new(1024 * 1024);
+        let converter = RepoConverter::new(1024 * 1024, Config::default());
         let output_file_path = dir.path().join("output.txt");
 
         converter
