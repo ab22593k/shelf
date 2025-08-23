@@ -578,6 +578,7 @@ mod tests {
             full_path
         }
 
+        #[cfg(not(windows))]
         fn create_symlink(&self, target: &Path, link_name: &str) -> PathBuf {
             debug!("Creating symlink: {} -> {}", link_name, target.display());
             let link_path = self.workdir().join(link_name);

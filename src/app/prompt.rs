@@ -1,14 +1,16 @@
-use anyhow::Result;
+use anyhow::{self, Result};
 use clap::Parser;
 use git2::Repository;
 use glob::Pattern;
 use handlebars::Handlebars;
 use indicatif::{ProgressBar, ProgressStyle};
+use rig::{client::builder::DynClientBuilder, completion::Prompt};
 use std::collections::{BTreeMap, HashSet};
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use tempfile::tempdir;
+use termimad::{self, MadSkin};
 use tracing::debug;
 use walkdir::WalkDir;
 
@@ -86,6 +88,22 @@ pub struct PromptCMD {
     /// ```
     #[arg(short, long, value_name = "PATH", help_heading = "Output Options")]
     template: Option<PathBuf>,
+
+    /// AI model provider to use for generation.
+    #[arg(long, default_value = "gemini")]
+    provider: String,
+
+    /// Specific model to use for the prompt.
+    #[arg(long, default_value = "gemini-2.5-flash-lite")]
+    model: String,
+
+    /// System prompt to guide the AI's behavior.
+    #[arg(long)]
+    preamble: Option<String>,
+
+    /// Execute the prompt with the AI model instead of saving to a file.
+    #[arg(long, short)]
+    execute: bool,
 }
 
 /// A converter for GitHub repositories or local directories to an LLM-friendly text file.
@@ -366,8 +384,46 @@ impl RepoConverter {
             }
         }
 
+        // Helper to compute a best-effort relative path for display and tree building.
+        // In the best_relative function, add better Windows path handling:
+        fn best_relative<'a>(file_path: &'a Path, base: &'a Path) -> PathBuf {
+            // First try a direct strip_prefix
+            if let Ok(rel) = file_path.strip_prefix(base) {
+                return rel.to_path_buf();
+            }
+
+            // On Windows, try case-insensitive comparison and handle short (8.3) paths
+            #[cfg(windows)]
+            {
+                // Convert both paths to lowercase strings for comparison
+                let base_str = base.to_string_lossy().to_lowercase().replace('\\', "/");
+                let file_str = file_path
+                    .to_string_lossy()
+                    .to_lowercase()
+                    .replace('\\', "/");
+
+                if file_str.starts_with(&base_str)
+                    && let Some(rel_path) = file_str.strip_prefix(&base_str)
+                {
+                    let clean_path = rel_path.trim_start_matches('/');
+                    return PathBuf::from(clean_path);
+                }
+
+                // Handle 8.3 short paths (e.g., PROGRA~1 -> Program Files)
+                if let (Ok(canon_base), Ok(canon_file)) =
+                    (base.canonicalize(), file_path.canonicalize())
+                    && let Ok(rel) = canon_file.strip_prefix(&canon_base)
+                {
+                    return rel.to_path_buf();
+                }
+            }
+
+            // Fallback for other platforms
+            file_path.to_path_buf()
+        }
+
         for file_path in files {
-            let relative_path = file_path.strip_prefix(repo_path).unwrap_or(file_path);
+            let relative_path = best_relative(file_path, repo_path);
             let components: Vec<String> = relative_path
                 .components()
                 .map(|c| c.as_os_str().to_string_lossy().to_string())
@@ -426,9 +482,68 @@ impl RepoConverter {
         output.push('\n');
 
         for file_path in files {
-            // When creating the file header, we need to make the path relative to the original source path,
-            // not the single `repo_path` which might be the CWD.
-            let display_path = file_path.strip_prefix(repo_path).unwrap_or(file_path);
+            // Compute a best-effort display path relative to the provided repo_path.
+            let display_path = {
+                let rel = best_relative(file_path, repo_path);
+                // If the computed relative path is still absolute or unchanged, try one more attempt:
+                // canonicalize both and strip, then if still not relative, fall back to showing the file name.
+                if rel == *file_path || rel.is_absolute() {
+                    if let (Ok(c_base), Ok(c_file)) =
+                        (repo_path.canonicalize(), file_path.canonicalize())
+                    {
+                        if let Ok(p) = c_file.strip_prefix(&c_base) {
+                            p.to_path_buf()
+                        } else {
+                            // Try stripping extended prefixes on Windows as a last resort
+                            fn strip_extended_prefix_buf(p: &Path) -> String {
+                                let s = p.to_string_lossy();
+                                if let Some(trimmed) = s.strip_prefix(r"\\?\UNC\") {
+                                    format!("\\\\{trimmed}")
+                                } else if let Some(trimmed) = s.strip_prefix(r"\\?\") {
+                                    trimmed.to_string()
+                                } else {
+                                    s.to_string()
+                                }
+                            }
+
+                            let cwd = std::env::current_dir().ok();
+                            if let Some(cwd) = cwd {
+                                if let Ok(p) = file_path.strip_prefix(&cwd) {
+                                    p.to_path_buf()
+                                } else {
+                                    // Compare normalized string forms
+                                    let s_base = strip_extended_prefix_buf(&c_base)
+                                        .replace('\\', "/")
+                                        .trim_end_matches('/')
+                                        .to_lowercase();
+                                    let s_file = strip_extended_prefix_buf(&c_file)
+                                        .replace('\\', "/")
+                                        .to_lowercase();
+                                    if s_file.starts_with(&format!("{s_base}/")) {
+                                        let rem = &s_file[s_base.len()..];
+                                        let rem = rem.trim_start_matches('/');
+                                        PathBuf::from(rem)
+                                    } else {
+                                        file_path.to_path_buf()
+                                    }
+                                }
+                            } else {
+                                file_path.to_path_buf()
+                            }
+                        }
+                    } else {
+                        std::env::current_dir()
+                            .ok()
+                            .and_then(|cwd| {
+                                file_path.strip_prefix(&cwd).ok().map(|p| p.to_path_buf())
+                            })
+                            .unwrap_or_else(|| file_path.to_path_buf())
+                    }
+                } else {
+                    rel
+                }
+            };
+
             output.push_str(&format!("\nFILE: {}\n", display_path.display()));
             output.push_str(&"-".repeat(80));
             output.push('\n');
@@ -486,11 +601,11 @@ impl RepoConverter {
         }
     }
 
-    /// The main conversion logic.
-    pub fn convert_repository(
+    /// Generates the context for the prompt.
+    fn generate_context_from_sources(
         &self,
         repo_sources: &[String],
-        output_file: Option<String>,
+        _output_file: Option<String>, // Mark as unused for now
     ) -> Result<String, Box<dyn std::error::Error>> {
         let mut all_files = Vec::new();
         let mut source_identifiers = Vec::new();
@@ -506,6 +621,9 @@ impl RepoConverter {
             spinner.set_message(repo_source.clone());
             spinner.tick();
 
+            // For local directories, prefer using a canonicalized path so subsequent
+            // strip_prefix operations produce compact, relative display paths
+            // (e.g., "main.rs" instead of the full absolute path).
             let (source_path, _temp_dir) = if repo_source.starts_with("http") {
                 let temp_dir = tempdir()?;
                 let path = temp_dir.path().to_path_buf();
@@ -513,7 +631,9 @@ impl RepoConverter {
                 (path, Some(temp_dir))
             } else {
                 let path = PathBuf::from(repo_source);
-                (path, None)
+                // Attempt to canonicalize; fall back to original path if it fails.
+                let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
+                (canonical, None)
             };
 
             debug!("Collecting files from source: {}", repo_source);
@@ -523,8 +643,12 @@ impl RepoConverter {
             source_identifiers.push(repo_source.to_string());
         }
 
+        // When a single local source is provided, use its canonical path as the base so
+        // that path.strip_prefix(base_repo_path) yields relative paths (e.g., "main.rs").
         let base_repo_path = if repo_sources.len() == 1 && Path::new(&repo_sources[0]).is_dir() {
-            PathBuf::from(&repo_sources[0]).canonicalize()?
+            PathBuf::from(&repo_sources[0])
+                .canonicalize()
+                .unwrap_or_else(|_| PathBuf::from(&repo_sources[0]))
         } else {
             std::env::current_dir()?
         };
@@ -532,15 +656,20 @@ impl RepoConverter {
         spinner.finish_with_message(format!("Collected {} files total.", all_files.len()));
 
         println!("Generating LLM-friendly text...");
-        let output_text = self.generate_llm_friendly_text(
+        Ok(self.generate_llm_friendly_text(
             &base_repo_path,
             &all_files,
             &source_identifiers.join(", "),
-        );
+        ))
+    }
 
-        // Apply template if provided
-        let final_output = self.apply_template(output_text)?;
-
+    /// Saves the generated content to a file.
+    fn save_to_file(
+        &self,
+        content: &str,
+        output_file: Option<String>,
+        source_identifiers: &[String],
+    ) -> Result<String> {
         let output_path = match output_file {
             Some(path) => PathBuf::from(path),
             None => {
@@ -553,31 +682,88 @@ impl RepoConverter {
         };
 
         let mut file = File::create(&output_path)?;
-        file.write_all(final_output.as_bytes())?;
+        file.write_all(content.as_bytes())?;
 
         Ok(output_path.to_string_lossy().to_string())
     }
 }
 
-pub async fn run(args: PromptCMD) -> Result<()> {
-    // Load configuration from file
-    let config = find_and_load_config().unwrap_or_else(|e| {
-        eprintln!("Warning: Could not load or parse shelf.toml: {e}. Using defaults.");
-        Config::default()
-    });
+/// Sets up the AI client and executes the prompt, streaming the response to stdout.
+async fn execute_with_ai(prompt: String, args: &PromptCMD) -> Result<()> {
+    debug!(
+        "Executing with AI provider: {}, model: {}",
+        args.provider, args.model
+    );
 
-    let converter = RepoConverter::new(args.clone(), config);
-    match converter.convert_repository(&args.repo_sources, args.output_file) {
-        Ok(output_path) => {
-            println!("\nConversion completed successfully!");
-            println!("Output written to: {output_path}",);
+    let client = DynClientBuilder::new();
+    let mut agent_builder = client.agent(&args.provider, &args.model)?;
+
+    if let Some(preamble) = &args.preamble {
+        agent_builder = agent_builder.preamble(preamble);
+    }
+
+    let agent = agent_builder.build();
+
+    match agent.prompt(prompt).await {
+        Ok(response) => {
+            let skin = MadSkin::default();
+            skin.print_text(&response);
             Ok(())
         }
         Err(e) => {
-            eprintln!("Error: {e}");
-            std::process::exit(1);
+            // Catch rig-core errors by inspecting their string output for key phrases.
+            let error_string = e.to_string();
+            let suggestion = if error_string.contains("No API key found") {
+                "Suggestion: Please set the required environment variable for your provider (e.g., 'GEMINI_API_KEY')."
+            } else if error_string.contains("invalid API key") {
+                "Suggestion: The provided API key is invalid or expired. Please check your credentials."
+            } else if error_string.contains("404 Not Found")
+                || error_string.contains("Model not found")
+            {
+                "Suggestion: The model name seems incorrect or is not available. Please check the model name and try again."
+            } else {
+                "Suggestion: Check your network connection, API credentials, and the model name."
+            };
+
+            let full_error_message = format!("AI Execution Error: {e}\n\n{suggestion}");
+
+            Err(anyhow::anyhow!(full_error_message))
         }
     }
+}
+
+pub async fn run(args: PromptCMD) -> Result<()> {
+    let config = find_and_load_config()?;
+
+    let converter = RepoConverter::new(args.clone(), config);
+
+    // This logic is now shared, but the final output is handled differently.
+    let _final_prompt = if args.execute {
+        // AI Execution Workflow
+        let spinner = ProgressBar::new_spinner().with_message("AI is thinking...");
+        spinner.enable_steady_tick(std::time::Duration::from_millis(100));
+        let context = converter
+            .generate_context_from_sources(&args.repo_sources, args.output_file.clone())
+            .unwrap();
+        let final_prompt = converter.apply_template(context)?;
+        let result = execute_with_ai(final_prompt.clone(), &args).await;
+        spinner.finish_and_clear();
+        result?; // Propagate error if AI execution fails
+        final_prompt // Return the prompt if execution was successful (though not used here)
+    } else {
+        // Save to File Workflow
+        let context = converter
+            .generate_context_from_sources(&args.repo_sources, args.output_file.clone())
+            .unwrap();
+        let final_prompt = converter.apply_template(context)?;
+        let output_path_str =
+            converter.save_to_file(&final_prompt, args.output_file.clone(), &args.repo_sources)?;
+        println!("\nConversion completed successfully!");
+        println!("Output written to: {output_path_str}");
+        final_prompt // Return the generated prompt for the sake of the return type
+    };
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -633,6 +819,10 @@ mod tests {
             exclude: None,
             no_line_numbers: false,
             template: None,
+            provider: "gemini".to_string(),
+            model: "test".to_string(),
+            preamble: None,
+            execute: false,
         };
         let converter = RepoConverter::new(args, Config::default());
         assert!(converter.should_skip_directory(Path::new("/project/.git")));
@@ -653,6 +843,10 @@ mod tests {
             exclude: None,
             no_line_numbers: false,
             template: None,
+            provider: "gemini".to_string(),
+            model: "test".to_string(),
+            preamble: None,
+            execute: false,
         };
         let converter = RepoConverter::new(args, Config::default());
 
@@ -675,6 +869,10 @@ mod tests {
             exclude: None,
             no_line_numbers: false,
             template: None,
+            provider: "gemini".to_string(),
+            model: "test".to_string(),
+            preamble: None,
+            execute: false,
         };
         let converter = RepoConverter::new(args, Config::default());
 
@@ -694,6 +892,10 @@ mod tests {
             exclude: None,
             no_line_numbers: false,
             template: None,
+            provider: "gemini".to_string(),
+            model: "test".to_string(),
+            preamble: None,
+            execute: false,
         };
         let converter = RepoConverter::new(args, Config::default());
         let files = converter.collect_files(dir.path());
@@ -725,6 +927,10 @@ mod tests {
             exclude: None,
             no_line_numbers: false,
             template: None,
+            provider: "gemini".to_string(),
+            model: "test".to_string(),
+            preamble: None,
+            execute: false,
         };
         let converter = RepoConverter::new(args, Config::default());
         let files = converter.collect_files(dir.path());
@@ -742,7 +948,7 @@ mod tests {
         // Check file contents section
         assert!(output.contains("FILE CONTENTS:"));
         assert!(output.contains("FILE: main.rs"));
-        assert!(output.contains("   1: fn main() {")); // Check line numbering
+        assert!(output.contains("   1: fn main() {"));
         assert!(output.contains("   2:     println!(\"Hello\");"));
         assert!(output.contains("FILE: src/lib.rs"));
         assert!(output.contains("   1: pub fn run() {}"));
@@ -759,16 +965,32 @@ mod tests {
             exclude: None,
             no_line_numbers: false,
             template: None,
+            provider: "gemini".to_string(),
+            model: "test".to_string(),
+            preamble: None,
+            execute: false,
         };
         let converter = RepoConverter::new(args, Config::default());
         let output_file_path = dir.path().join("output.txt");
 
-        converter
-            .convert_repository(
-                &[dir.path().to_str().unwrap().to_string()],
+        let repo_sources = vec![dir.path().to_str().unwrap().to_string()];
+
+        // Manually replicate the new logic from the `run` function for the test
+        let context = converter
+            .generate_context_from_sources(
+                &repo_sources,
                 Some(output_file_path.to_str().unwrap().to_string()),
             )
             .unwrap();
+        let final_prompt = converter.apply_template(context).unwrap();
+        let result = converter.save_to_file(
+            &final_prompt,
+            Some(output_file_path.to_str().unwrap().to_string()),
+            &repo_sources,
+        );
+
+        // Ensure the save succeeded
+        result.unwrap();
 
         let output_content = fs::read_to_string(output_file_path).unwrap();
 
@@ -786,5 +1008,155 @@ mod tests {
         assert!(output_content.contains("This is a test repo."));
         assert!(output_content.contains("FILE: src/lib.rs"));
         assert!(output_content.contains("pub fn run() {}"));
+    }
+
+    #[test]
+    fn test_config_loading() {
+        let temp_dir = tempdir().unwrap();
+        let current_dir = temp_dir.path();
+
+        // Preserve original environment to avoid leaking changes between tests
+        let original_xdg = std::env::var_os("XDG_CONFIG_HOME");
+        let original_home = std::env::var_os("HOME");
+        let original_appdata = std::env::var_os("APPDATA");
+        let original_cwd = std::env::current_dir().ok();
+
+        // Temporarily override XDG_CONFIG_HOME and HOME to isolate the test from real user configs
+        // Point XDG_CONFIG_HOME to an empty temp directory to avoid picking up global config.
+        unsafe {
+            std::env::set_var("XDG_CONFIG_HOME", current_dir);
+            std::env::set_var("HOME", current_dir);
+            // On Windows, many config lookups use APPDATA; override it as well for the test.
+            if cfg!(windows) {
+                std::env::set_var("APPDATA", current_dir);
+            }
+        }
+
+        // Test 1: No config file found
+        std::env::set_current_dir(current_dir).unwrap();
+        let config = find_and_load_config().unwrap();
+        assert!(config.prompt.skip_directories.is_empty());
+
+        // Test 2: shelf.toml is found (HOME based lookup)
+        let toml_content = r#"
+    [prompt]
+    skip_directories = ["docs/"]
+    skip_files = ["*.lock"]
+    "#;
+        fs::write(current_dir.join("shelf.toml"), toml_content).unwrap();
+        let config = find_and_load_config().unwrap();
+        assert_eq!(config.prompt.skip_directories, vec!["docs/"]);
+        assert_eq!(config.prompt.skip_files, vec!["*.lock"]);
+
+        // Test 3: Finds config in parent directory when CWD is nested
+        let sub_dir = current_dir.join("subdir");
+        fs::create_dir(&sub_dir).unwrap();
+        std::env::set_current_dir(&sub_dir).unwrap();
+        let config = find_and_load_config().unwrap();
+        assert_eq!(config.prompt.skip_directories, vec!["docs/"]);
+
+        // Restore original environment
+        if let Some(xdg) = original_xdg {
+            unsafe { std::env::set_var("XDG_CONFIG_HOME", xdg) };
+        } else {
+            unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
+        }
+
+        if let Some(home) = original_home {
+            unsafe { std::env::set_var("HOME", home) };
+        } else {
+            unsafe { std::env::remove_var("HOME") };
+        }
+
+        if cfg!(windows) {
+            if let Some(appdata) = original_appdata {
+                unsafe { std::env::set_var("APPDATA", appdata) };
+            } else {
+                unsafe { std::env::remove_var("APPDATA") };
+            }
+        }
+
+        if let Some(cwd) = original_cwd {
+            std::env::set_current_dir(cwd).unwrap();
+        }
+    }
+
+    #[test]
+    fn test_glob_filtering() {
+        let dir = setup_test_directory().unwrap();
+
+        // Test --exclude
+        let args_exclude = PromptCMD {
+            repo_sources: vec![],
+            output_file: None,
+            max_size: 1024 * 1024,
+            include: None,
+            template: None,
+            exclude: Some(vec!["**/*.rs".to_string()]),
+            no_line_numbers: false,
+            preamble: None,
+            provider: "".to_string(),
+            model: "".to_string(),
+            execute: false,
+        };
+        let converter = RepoConverter::new(args_exclude.clone(), Config::default());
+        let files = converter.collect_files(dir.path());
+        assert_eq!(files.len(), 2); // README.md, src/module.py
+        assert!(files.iter().all(|p| !p.to_str().unwrap().ends_with(".rs")));
+
+        // Test --include
+        let args_include = PromptCMD {
+            include: Some(vec!["**/README.md".to_string()]),
+            exclude: None,
+            ..args_exclude.clone()
+        };
+        let converter = RepoConverter::new(args_include, Config::default());
+        let files = converter.collect_files(dir.path());
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].file_name().unwrap(), "README.md");
+
+        // Test combination: include and exclude
+        let args_combo = PromptCMD {
+            include: Some(vec!["src/**/*".to_string()]), // include everything in src
+            exclude: Some(vec!["**/*.py".to_string()]),  // but exclude python files
+            ..args_exclude.clone()
+        };
+        let converter = RepoConverter::new(args_combo, Config::default());
+        let files = converter.collect_files(dir.path());
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].file_name().unwrap(), "lib.rs");
+    }
+
+    #[test]
+    fn test_template_application() {
+        let dir = tempdir().unwrap();
+        let template_path = dir.path().join("template.hbs");
+        fs::write(
+            &template_path,
+            "Analyze this code:\n```\n{{REPOSITORY_CONTEXT}}\n```",
+        )
+        .unwrap();
+
+        let args = PromptCMD {
+            repo_sources: vec![],
+            output_file: None,
+            max_size: 1024 * 1024,
+            include: None,
+            exclude: None,
+            no_line_numbers: false,
+            preamble: None,
+            provider: "".to_string(),
+            model: "".to_string(),
+            execute: false,
+            template: Some(template_path),
+        };
+
+        let converter = RepoConverter::new(args, Config::default());
+        let context = "Hello, World!".to_string();
+        let rendered = converter.apply_template(context).unwrap();
+
+        assert!(rendered.starts_with("Analyze this code:\n```"));
+        assert!(rendered.ends_with("\n```"));
+        assert!(rendered.contains("Hello, World!"));
     }
 }
