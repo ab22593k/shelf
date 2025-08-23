@@ -1,14 +1,16 @@
-use anyhow::Result;
+use anyhow::{self, Result};
 use clap::Parser;
 use git2::Repository;
 use glob::Pattern;
 use handlebars::Handlebars;
 use indicatif::{ProgressBar, ProgressStyle};
+use rig::{client::builder::DynClientBuilder, completion::Prompt};
 use std::collections::{BTreeMap, HashSet};
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use tempfile::tempdir;
+use termimad::{self, MadSkin};
 use tracing::debug;
 use walkdir::WalkDir;
 
@@ -86,6 +88,22 @@ pub struct PromptCMD {
     /// ```
     #[arg(short, long, value_name = "PATH", help_heading = "Output Options")]
     template: Option<PathBuf>,
+
+    /// AI model provider to use for generation.
+    #[arg(long, default_value = "gemini")]
+    provider: String,
+
+    /// Specific model to use for the prompt.
+    #[arg(long, default_value = "gemini-2.5-flash-lite")]
+    model: String,
+
+    /// System prompt to guide the AI's behavior.
+    #[arg(long)]
+    preamble: Option<String>,
+
+    /// Execute the prompt with the AI model instead of saving to a file.
+    #[arg(long, short)]
+    execute: bool,
 }
 
 /// A converter for GitHub repositories or local directories to an LLM-friendly text file.
@@ -486,11 +504,11 @@ impl RepoConverter {
         }
     }
 
-    /// The main conversion logic.
-    pub fn convert_repository(
+    /// Generates the context for the prompt.
+    fn generate_context_from_sources(
         &self,
         repo_sources: &[String],
-        output_file: Option<String>,
+        _output_file: Option<String>, // Mark as unused for now
     ) -> Result<String, Box<dyn std::error::Error>> {
         let mut all_files = Vec::new();
         let mut source_identifiers = Vec::new();
@@ -532,15 +550,20 @@ impl RepoConverter {
         spinner.finish_with_message(format!("Collected {} files total.", all_files.len()));
 
         println!("Generating LLM-friendly text...");
-        let output_text = self.generate_llm_friendly_text(
+        Ok(self.generate_llm_friendly_text(
             &base_repo_path,
             &all_files,
             &source_identifiers.join(", "),
-        );
+        ))
+    }
 
-        // Apply template if provided
-        let final_output = self.apply_template(output_text)?;
-
+    /// Saves the generated content to a file.
+    fn save_to_file(
+        &self,
+        content: &str,
+        output_file: Option<String>,
+        source_identifiers: &[String],
+    ) -> Result<String> {
         let output_path = match output_file {
             Some(path) => PathBuf::from(path),
             None => {
@@ -553,31 +576,88 @@ impl RepoConverter {
         };
 
         let mut file = File::create(&output_path)?;
-        file.write_all(final_output.as_bytes())?;
+        file.write_all(content.as_bytes())?;
 
         Ok(output_path.to_string_lossy().to_string())
     }
 }
 
-pub async fn run(args: PromptCMD) -> Result<()> {
-    // Load configuration from file
-    let config = find_and_load_config().unwrap_or_else(|e| {
-        eprintln!("Warning: Could not load or parse shelf.toml: {e}. Using defaults.");
-        Config::default()
-    });
+/// Sets up the AI client and executes the prompt, streaming the response to stdout.
+async fn execute_with_ai(prompt: String, args: &PromptCMD) -> Result<()> {
+    debug!(
+        "Executing with AI provider: {}, model: {}",
+        args.provider, args.model
+    );
 
-    let converter = RepoConverter::new(args.clone(), config);
-    match converter.convert_repository(&args.repo_sources, args.output_file) {
-        Ok(output_path) => {
-            println!("\nConversion completed successfully!");
-            println!("Output written to: {output_path}",);
+    let client = DynClientBuilder::new();
+    let mut agent_builder = client.agent(&args.provider, &args.model)?;
+
+    if let Some(preamble) = &args.preamble {
+        agent_builder = agent_builder.preamble(preamble);
+    }
+
+    let agent = agent_builder.build();
+
+    match agent.prompt(prompt).await {
+        Ok(response) => {
+            let skin = MadSkin::default();
+            skin.print_text(&response);
             Ok(())
         }
         Err(e) => {
-            eprintln!("Error: {e}");
-            std::process::exit(1);
+            // Catch rig-core errors by inspecting their string output for key phrases.
+            let error_string = e.to_string();
+            let suggestion = if error_string.contains("No API key found") {
+                "Suggestion: Please set the required environment variable for your provider (e.g., 'GEMINI_API_KEY')."
+            } else if error_string.contains("invalid API key") {
+                "Suggestion: The provided API key is invalid or expired. Please check your credentials."
+            } else if error_string.contains("404 Not Found")
+                || error_string.contains("Model not found")
+            {
+                "Suggestion: The model name seems incorrect or is not available. Please check the model name and try again."
+            } else {
+                "Suggestion: Check your network connection, API credentials, and the model name."
+            };
+
+            let full_error_message = format!("AI Execution Error: {e}\n\n{suggestion}");
+
+            Err(anyhow::anyhow!(full_error_message))
         }
     }
+}
+
+pub async fn run(args: PromptCMD) -> Result<()> {
+    let config = find_and_load_config()?;
+
+    let converter = RepoConverter::new(args.clone(), config);
+
+    // This logic is now shared, but the final output is handled differently.
+    let _final_prompt = if args.execute {
+        // AI Execution Workflow
+        let spinner = ProgressBar::new_spinner().with_message("AI is thinking...");
+        spinner.enable_steady_tick(std::time::Duration::from_millis(100));
+        let context = converter
+            .generate_context_from_sources(&args.repo_sources, args.output_file.clone())
+            .unwrap();
+        let final_prompt = converter.apply_template(context)?;
+        let result = execute_with_ai(final_prompt.clone(), &args).await;
+        spinner.finish_and_clear();
+        result?; // Propagate error if AI execution fails
+        final_prompt // Return the prompt if execution was successful (though not used here)
+    } else {
+        // Save to File Workflow
+        let context = converter
+            .generate_context_from_sources(&args.repo_sources, args.output_file.clone())
+            .unwrap();
+        let final_prompt = converter.apply_template(context)?;
+        let output_path_str =
+            converter.save_to_file(&final_prompt, args.output_file.clone(), &args.repo_sources)?;
+        println!("\nConversion completed successfully!");
+        println!("Output written to: {output_path_str}");
+        final_prompt // Return the generated prompt for the sake of the return type
+    };
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -633,6 +713,10 @@ mod tests {
             exclude: None,
             no_line_numbers: false,
             template: None,
+            provider: "gemini".to_string(),
+            model: "test".to_string(),
+            preamble: None,
+            execute: false,
         };
         let converter = RepoConverter::new(args, Config::default());
         assert!(converter.should_skip_directory(Path::new("/project/.git")));
@@ -653,6 +737,10 @@ mod tests {
             exclude: None,
             no_line_numbers: false,
             template: None,
+            provider: "gemini".to_string(),
+            model: "test".to_string(),
+            preamble: None,
+            execute: false,
         };
         let converter = RepoConverter::new(args, Config::default());
 
@@ -675,6 +763,10 @@ mod tests {
             exclude: None,
             no_line_numbers: false,
             template: None,
+            provider: "gemini".to_string(),
+            model: "test".to_string(),
+            preamble: None,
+            execute: false,
         };
         let converter = RepoConverter::new(args, Config::default());
 
@@ -694,6 +786,10 @@ mod tests {
             exclude: None,
             no_line_numbers: false,
             template: None,
+            provider: "gemini".to_string(),
+            model: "test".to_string(),
+            preamble: None,
+            execute: false,
         };
         let converter = RepoConverter::new(args, Config::default());
         let files = converter.collect_files(dir.path());
@@ -725,6 +821,10 @@ mod tests {
             exclude: None,
             no_line_numbers: false,
             template: None,
+            provider: "gemini".to_string(),
+            model: "test".to_string(),
+            preamble: None,
+            execute: false,
         };
         let converter = RepoConverter::new(args, Config::default());
         let files = converter.collect_files(dir.path());
@@ -759,16 +859,32 @@ mod tests {
             exclude: None,
             no_line_numbers: false,
             template: None,
+            provider: "gemini".to_string(),
+            model: "test".to_string(),
+            preamble: None,
+            execute: false,
         };
         let converter = RepoConverter::new(args, Config::default());
         let output_file_path = dir.path().join("output.txt");
 
-        converter
-            .convert_repository(
-                &[dir.path().to_str().unwrap().to_string()],
+        let repo_sources = vec![dir.path().to_str().unwrap().to_string()];
+
+        // Manually replicate the new logic from the `run` function for the test
+        let context = converter
+            .generate_context_from_sources(
+                &repo_sources,
                 Some(output_file_path.to_str().unwrap().to_string()),
             )
             .unwrap();
+        let final_prompt = converter.apply_template(context).unwrap();
+        let result = converter.save_to_file(
+            &final_prompt,
+            Some(output_file_path.to_str().unwrap().to_string()),
+            &repo_sources,
+        );
+
+        // Ensure the save succeeded
+        result.unwrap();
 
         let output_content = fs::read_to_string(output_file_path).unwrap();
 
@@ -786,5 +902,130 @@ mod tests {
         assert!(output_content.contains("This is a test repo."));
         assert!(output_content.contains("FILE: src/lib.rs"));
         assert!(output_content.contains("pub fn run() {}"));
+    }
+
+    #[test]
+    fn test_config_loading() {
+        let temp_dir = tempdir().unwrap();
+        let current_dir = temp_dir.path();
+
+        // Preserve original environment to avoid leaking changes between tests
+        let original_home = std::env::var_os("HOME");
+        let original_cwd = std::env::current_dir().ok();
+
+        // Temporarily override HOME to isolate the test from real user configs
+        unsafe { std::env::set_var("HOME", current_dir) };
+
+        // Test 1: No config file found
+        std::env::set_current_dir(current_dir).unwrap();
+        let config = find_and_load_config().unwrap();
+        assert!(config.prompt.skip_directories.is_empty());
+
+        // Test 2: shelf.toml is found
+        let toml_content = r#"
+    [prompt]
+    skip_directories = ["docs/"]
+    skip_files = ["*.lock"]
+    "#;
+        fs::write(current_dir.join("shelf.toml"), toml_content).unwrap();
+        let config = find_and_load_config().unwrap();
+        assert_eq!(config.prompt.skip_directories, vec!["docs/"]);
+        assert_eq!(config.prompt.skip_files, vec!["*.lock"]);
+
+        // Test 3: Finds config in parent directory
+        let sub_dir = current_dir.join("subdir");
+        fs::create_dir(&sub_dir).unwrap();
+        std::env::set_current_dir(&sub_dir).unwrap();
+        let config = find_and_load_config().unwrap();
+        assert_eq!(config.prompt.skip_directories, vec!["docs/"]);
+
+        // Restore original environment
+        if let Some(home) = original_home {
+            unsafe { std::env::set_var("HOME", home) };
+        } else {
+            unsafe { std::env::remove_var("HOME") };
+        }
+        if let Some(cwd) = original_cwd {
+            std::env::set_current_dir(cwd).unwrap();
+        }
+    }
+
+    #[test]
+    fn test_glob_filtering() {
+        let dir = setup_test_directory().unwrap();
+
+        // Test --exclude
+        let args_exclude = PromptCMD {
+            repo_sources: vec![],
+            output_file: None,
+            max_size: 1024 * 1024,
+            include: None,
+            template: None,
+            exclude: Some(vec!["**/*.rs".to_string()]),
+            no_line_numbers: false,
+            preamble: None,
+            provider: "".to_string(),
+            model: "".to_string(),
+            execute: false,
+        };
+        let converter = RepoConverter::new(args_exclude.clone(), Config::default());
+        let files = converter.collect_files(dir.path());
+        assert_eq!(files.len(), 2); // README.md, src/module.py
+        assert!(files.iter().all(|p| !p.to_str().unwrap().ends_with(".rs")));
+
+        // Test --include
+        let args_include = PromptCMD {
+            include: Some(vec!["**/README.md".to_string()]),
+            exclude: None,
+            ..args_exclude.clone()
+        };
+        let converter = RepoConverter::new(args_include, Config::default());
+        let files = converter.collect_files(dir.path());
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].file_name().unwrap(), "README.md");
+
+        // Test combination: include and exclude
+        let args_combo = PromptCMD {
+            include: Some(vec!["src/**/*".to_string()]), // include everything in src
+            exclude: Some(vec!["**/*.py".to_string()]),  // but exclude python files
+            ..args_exclude.clone()
+        };
+        let converter = RepoConverter::new(args_combo, Config::default());
+        let files = converter.collect_files(dir.path());
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].file_name().unwrap(), "lib.rs");
+    }
+
+    #[test]
+    fn test_template_application() {
+        let dir = tempdir().unwrap();
+        let template_path = dir.path().join("template.hbs");
+        fs::write(
+            &template_path,
+            "Analyze this code:\n```\n{{REPOSITORY_CONTEXT}}\n```",
+        )
+        .unwrap();
+
+        let args = PromptCMD {
+            repo_sources: vec![],
+            output_file: None,
+            max_size: 1024 * 1024,
+            include: None,
+            exclude: None,
+            no_line_numbers: false,
+            preamble: None,
+            provider: "".to_string(),
+            model: "".to_string(),
+            execute: false,
+            template: Some(template_path),
+        };
+
+        let converter = RepoConverter::new(args, Config::default());
+        let context = "Hello, World!".to_string();
+        let rendered = converter.apply_template(context).unwrap();
+
+        assert!(rendered.starts_with("Analyze this code:\n```"));
+        assert!(rendered.ends_with("\n```"));
+        assert!(rendered.contains("Hello, World!"));
     }
 }

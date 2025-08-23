@@ -1,7 +1,10 @@
 use anyhow::Result;
 use directories::BaseDirs;
 use serde::Deserialize;
-use std::{fs, path::Path};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use crate::{app::dots::Dots, error::Shelfor};
 
@@ -34,46 +37,73 @@ pub fn init_bare_repo() -> Result<Dots> {
     Dots::new(vault_core_path, canonical_home)
 }
 
-/// Searches for `shelf.toml` in common absolute locations
-/// and then in the current directory and its ancestors.
+/// Searches for `shelf.toml` in a deterministic order and returns the parsed config
+/// from the first matching file. If none are found, returns the default `Config`.
 ///
 /// Search order (platform-specific paths determined by the `directories` crate):
-/// 1. `BaseDirs::config_dir()`/shelf/shelf.toml (e.g., `$XDG_CONFIG_HOME/shelf/shelf.toml` on Linux, `%APPDATA%\shelf\shelf.toml` on Windows)
-/// 2. `BaseDirs::home_dir()`/shelf.toml
-/// 3. `BaseDirs::home_dir()`/.shelf.toml
-/// 4. Current directory and its ancestors: `shelf.toml`, `.shelf.toml`
+/// 1. `XDG_CONFIG_HOME`/shelf/shelf.toml (if XDG_CONFIG_HOME env var is set)
+/// 2. `BaseDirs::config_dir()`/shelf/shelf.toml
+/// 3. `HOME`/shelf.toml (if HOME env var is set)
+/// 4. `BaseDirs::home_dir()`/shelf/shelf.toml
+/// 5. `HOME`/.shelf.toml or `BaseDirs::home_dir()`/.shelf.toml
+/// 6. Current directory and its ancestors: `shelf.toml`, `.shelf.toml`
 pub(super) fn find_and_load_config() -> Result<Config> {
-    // Build an iterator of candidate paths, starting with standard locations.
-    let standard_paths = BaseDirs::new().into_iter().flat_map(|dirs| {
-        [
-            dirs.config_dir().join("shelf/shelf.toml"),
-            dirs.home_dir().join("shelf.toml"),
-            dirs.home_dir().join(".shelf.toml"),
-        ]
-    });
+    // Build the candidate list and attempt to load the first valid config.
+    let candidates = build_candidate_paths()?;
 
-    // Chain it with paths from the current directory and its ancestors.
-    let binding = std::env::current_dir()?;
-    let ancestor_paths = binding
-        .ancestors()
-        .flat_map(|path| [path.join("shelf.toml"), path.join(".shelf.toml")]);
+    for path in candidates {
+        if let Some(result) = try_load_from(&path) {
+            // If the file exists but reading/parsing failed, propagate the error.
+            // If it parsed successfully, return the parsed config.
+            return result;
+        }
+    }
 
-    let mut candidate_paths = standard_paths.chain(ancestor_paths);
+    // No configuration found: return default.
+    Ok(Config::default())
+}
 
-    // Search through all candidate paths. `find_map` will stop at the first `Some`.
-    let maybe_config_result = candidate_paths.find_map(|p| try_load_from(&p));
+/// Construct the list of candidate config file paths in preferred order.
+///
+/// This helper centralizes the path-building logic to improve readability.
+fn build_candidate_paths() -> std::io::Result<Vec<PathBuf>> {
+    let mut candidate_paths: Vec<PathBuf> = Vec::new();
 
-    // If a file was found, `maybe_config_result` is `Some(Result<Config>)`.
-    // We transpose this to `Result<Option<Config>>` to handle the error case.
-    // If no file was found, we return a default config.
-    Ok(maybe_config_result.transpose()?.unwrap_or_default())
+    // 1) XDG_CONFIG_HOME if explicitly set (preferred)
+    if let Ok(xdg_config) = std::env::var("XDG_CONFIG_HOME") {
+        candidate_paths.push(PathBuf::from(xdg_config).join("shelf").join("shelf.toml"));
+    }
+
+    // 2) System config dir (independent from XDG_CONFIG_HOME)
+    let base_dirs = BaseDirs::new();
+    if let Some(dirs) = base_dirs.as_ref() {
+        candidate_paths.push(dirs.config_dir().join("shelf").join("shelf.toml"));
+    }
+
+    // 3/4) Home-based locations (prefer HOME env if set)
+    if let Ok(home) = std::env::var("HOME") {
+        candidate_paths.push(PathBuf::from(&home).join("shelf.toml"));
+        candidate_paths.push(PathBuf::from(&home).join(".shelf.toml"));
+    } else if let Some(dirs) = base_dirs {
+        candidate_paths.push(dirs.home_dir().join("shelf.toml"));
+        candidate_paths.push(dirs.home_dir().join(".shelf.toml"));
+    }
+
+    // 5) Current directory and its ancestors
+    let cwd = std::env::current_dir()?;
+    for ancestor in cwd.ancestors() {
+        candidate_paths.push(ancestor.join("shelf.toml"));
+        candidate_paths.push(ancestor.join(".shelf.toml"));
+    }
+
+    Ok(candidate_paths)
 }
 
 /// Attempts to load a `Config` from the given path.
 ///
-/// If the file exists, it returns `Some(Result<Config>)`. The `Result` will be
+/// If the file exists, returns `Some(Result<Config>)`. The `Result` will be
 /// `Ok` on successful parsing or `Err` on I/O or parse errors.
-/// If the file does not exist, it returns `None`.
+/// If the file does not exist, returns `None`.
 fn try_load_from(path: &Path) -> Option<Result<Config>> {
     if !path.exists() {
         return None;
