@@ -1,13 +1,14 @@
 use anyhow::Result;
 use clap::Parser;
 use git2::Repository;
-use serde::Deserialize;
 use std::collections::{BTreeMap, HashSet};
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use tempfile::tempdir;
 use walkdir::WalkDir;
+
+use crate::config::{Config, find_and_load_config};
 
 #[derive(Parser, Debug, Clone)]
 #[command(author, version, about, long_about = None)]
@@ -23,22 +24,6 @@ pub struct PromptCMD {
     /// Maximum file size in bytes (default: 1MB)
     #[arg(long, default_value_t = 1024 * 1024)]
     max_size: u64,
-}
-
-/// Configuration for the prompt generation, loaded from `shelf.toml`.
-#[derive(Deserialize, Default, Debug, Clone)]
-struct PromptConfig {
-    #[serde(default)]
-    skip_directories: Vec<String>,
-    #[serde(default)]
-    skip_files: Vec<String>,
-}
-
-/// Main configuration structure, mirroring `shelf.toml`.
-#[derive(Deserialize, Default, Debug, Clone)]
-struct Config {
-    #[serde(default)]
-    prompt: PromptConfig,
 }
 
 /// A converter for GitHub repositories or local directories to an LLM-friendly text file.
@@ -391,36 +376,12 @@ impl RepoConverter {
     }
 }
 
-/// Searches for `shelf.toml` in the current directory and parent directories.
-fn find_and_load_config() -> Result<Config> {
-    let current_dir = std::env::current_dir()?;
-    for path in current_dir.ancestors() {
-        let config_path = path.join("shelf.toml");
-        if config_path.exists() {
-            println!("Loading config from: {}", config_path.display());
-            let content = fs::read_to_string(config_path)?;
-            return Ok(toml::from_str(&content)?);
-        }
-        let hidden_config_path = path.join(".shelf.toml");
-        if hidden_config_path.exists() {
-            println!("Loading config from: {}", hidden_config_path.display());
-            let content = fs::read_to_string(hidden_config_path)?;
-            return Ok(toml::from_str(&content)?);
-        }
-    }
-
-    Ok(Config::default()) // Return default config if no file is found
-}
-
 pub async fn run(args: PromptCMD) -> Result<()> {
     // Load configuration from file
     let config = match find_and_load_config() {
         Ok(cfg) => cfg,
         Err(e) => {
-            eprintln!(
-                "Warning: Could not load or parse shelf.toml: {}. Using defaults.",
-                e
-            );
+            eprintln!("Warning: Could not load or parse shelf.toml: {e}. Using defaults.");
             Config::default()
         }
     };

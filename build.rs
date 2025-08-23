@@ -13,6 +13,52 @@ fn main() -> Result<(), Box<dyn Error>> {
     ensure_dir_exists(&target_assets_dir)?;
     copy_assets_from_source_to_target(SOURCE_ASSETS_DIR, &target_assets_dir)?;
 
+    // Create a default shelf.toml config file if it doesn't exist.
+    let shelf_config_dir = base_dirs.config_dir().join("shelf");
+    create_default_config_if_not_exists(&shelf_config_dir)?;
+
+    Ok(())
+}
+
+/// Creates a default `shelf.toml` in the given directory if one doesn't already exist.
+fn create_default_config_if_not_exists(shelf_config_dir: &Path) -> Result<(), Box<dyn Error>> {
+    let config_file_path = shelf_config_dir.join("shelf.toml");
+    if config_file_path.exists() {
+        return Ok(());
+    }
+
+    let default_config_content = r#"# Shelf configuration file.
+# You can customize the behavior of `shelf prompt` command here.
+
+[prompt]
+# List of directory names to skip when collecting files.
+skip_directories = [
+    ".git",
+    "target",
+    "node_modules",
+    "dist",
+    "build",
+    ".vscode",
+    ".idea",
+    "__pycache__",
+]
+
+# List of file names to skip.
+skip_files = [
+    "*.lock",
+    "*.log",
+    ".DS_Store",
+]
+"#;
+
+    fs::write(&config_file_path, default_config_content)
+        .map_err(|e| format!("Failed to write default config file to {config_file_path:?}: {e}"))?;
+
+    println!(
+        "cargo:warning=Created a default shelf config at: {}",
+        config_file_path.display()
+    );
+
     Ok(())
 }
 

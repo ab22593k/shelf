@@ -175,6 +175,37 @@ pub struct Dots {
     iter_index: usize,              // Tracks iteration progress
 }
 
+impl std::fmt::Debug for Dots {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Git directory (bare repo path)
+        let git_dir = self.bare.path().display();
+
+        // Workdir may be absent for bare repos; present as string if available
+        let workdir = self
+            .bare
+            .workdir()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "<none>".to_string());
+
+        // Human readable filter
+        let filter = match self.filter {
+            ListFilter::All => "All",
+            ListFilter::Modified => "Modified",
+        };
+
+        // Attempt to get number of tracked entries from the index; fall back gracefully on error
+        let tracked_entries = match self.bare.index() {
+            Ok(idx) => idx.len().to_string(),
+            Err(_) => "-".to_string(),
+        };
+
+        write!(
+            f,
+            "Dots {{ git_dir: {git_dir}, workdir: {workdir}, filter: {filter}, tracked_entries: {tracked_entries} }}"
+        )
+    }
+}
+
 impl Dots {
     pub fn new(git_dir: PathBuf, work_tree: PathBuf) -> Result<Self> {
         verify_git_installation()?;
