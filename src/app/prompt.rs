@@ -2,11 +2,13 @@ use anyhow::Result;
 use clap::Parser;
 use git2::Repository;
 use glob::Pattern;
+use indicatif::{ProgressBar, ProgressStyle};
 use std::collections::{BTreeMap, HashSet};
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use tempfile::tempdir;
+use tracing::debug;
 use walkdir::WalkDir;
 
 use crate::config::{Config, find_and_load_config};
@@ -49,7 +51,7 @@ struct RepoConverter {
 // An enum to represent our file system tree structure.
 // This solves the "cyclic type" error by defining a recursive structure correctly.
 enum FileTreeNode {
-    File(u64), // Contains the file size
+    File(u64 /* size */),
     Directory(BTreeMap<String, FileTreeNode>),
 }
 
@@ -102,15 +104,28 @@ impl RepoConverter {
             skip_files.insert(pattern);
         }
 
-        if let Some(file_name) = file_path.file_name().and_then(|n| n.to_str())
-            && skip_files.contains(file_name.to_lowercase().as_str())
-        {
-            return true;
+        if let Some(file_name) = file_path.file_name().and_then(|n| n.to_str()) {
+            if skip_files
+                .iter()
+                .any(|p| glob::Pattern::new(p).map_or(false, |pat| pat.matches(file_name)))
+            {
+                debug!(
+                    "Skipping file due to skip_files pattern: {}",
+                    file_path.display()
+                );
+                return true;
+            }
         }
 
         if let Ok(metadata) = fs::metadata(file_path)
             && metadata.len() > self.max_file_size
         {
+            debug!(
+                "Skipping file due to size ({} > {}): {}",
+                metadata.len(),
+                self.max_file_size,
+                file_path.display()
+            );
             return true;
         }
 
@@ -174,7 +189,13 @@ impl RepoConverter {
         }
 
         if let Some(dir_name) = dir_path.file_name().and_then(|n| n.to_str()) {
-            return skip_directories.contains(dir_name.to_lowercase().as_str());
+            if skip_directories.contains(dir_name) {
+                debug!(
+                    "Skipping directory due to skip_directories: {}",
+                    dir_path.display()
+                );
+                return true;
+            }
         }
 
         false
@@ -215,9 +236,12 @@ impl RepoConverter {
                 .filter_map(|p| Pattern::new(p).ok())
                 .collect();
             excluded_files.retain(|path| {
-                !globs
-                    .iter()
-                    .any(|glob| glob.matches_path(path.strip_prefix(repo_path).unwrap_or(path)))
+                let relative_path = path.strip_prefix(repo_path).unwrap_or(path);
+                let is_excluded = globs.iter().any(|glob| glob.matches_path(relative_path));
+                if is_excluded {
+                    debug!("Excluding file due to --exclude glob: {}", path.display());
+                }
+                !is_excluded
             });
         }
 
@@ -230,9 +254,15 @@ impl RepoConverter {
             excluded_files
                 .into_iter()
                 .filter(|path| {
-                    globs
-                        .iter()
-                        .any(|glob| glob.matches_path(path.strip_prefix(repo_path).unwrap_or(path)))
+                    let relative_path = path.strip_prefix(repo_path).unwrap_or(path);
+                    let is_included = globs.iter().any(|glob| glob.matches_path(relative_path));
+                    if !is_included {
+                        debug!(
+                            "Excluding file due to missing --include glob: {}",
+                            path.display()
+                        );
+                    }
+                    is_included
                 })
                 .collect()
         } else {
@@ -330,7 +360,7 @@ impl RepoConverter {
                         }
                         FileTreeNode::File(size) => {
                             let size_str = if *size < 1024 {
-                                format!("({} bytes)", size)
+                                format!("({size} bytes)")
                             } else {
                                 format!("({}KB)", size / 1024)
                             };
@@ -390,7 +420,17 @@ impl RepoConverter {
         let mut all_files = Vec::new();
         let mut source_identifiers = Vec::new();
 
+        let spinner = ProgressBar::new_spinner();
+        spinner.set_style(
+            ProgressStyle::default_spinner()
+                .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ ")
+                .template("{spinner:.green} Processing: {msg}")?,
+        );
+
         for repo_source in repo_sources {
+            spinner.set_message(repo_source.clone());
+            spinner.tick();
+
             let (source_path, _temp_dir) = if repo_source.starts_with("http") {
                 let temp_dir = tempdir()?;
                 let path = temp_dir.path().to_path_buf();
@@ -398,12 +438,12 @@ impl RepoConverter {
                 (path, Some(temp_dir))
             } else {
                 let path = PathBuf::from(repo_source);
-                (path.canonicalize().unwrap_or(path), None)
+                (path, None)
             };
 
-            println!("Collecting files from {repo_source}...");
+            debug!("Collecting files from source: {}", repo_source);
             let files = self.collect_files(&source_path);
-            println!("Found {} text files in {}.", files.len(), repo_source);
+            debug!("Found {} text files in {}.", files.len(), repo_source);
             all_files.extend(files);
             source_identifiers.push(repo_source.to_string());
         }
@@ -413,6 +453,8 @@ impl RepoConverter {
         } else {
             std::env::current_dir()?
         };
+
+        spinner.finish_with_message(format!("Collected {} files total.", all_files.len()));
 
         println!("Generating LLM-friendly text...");
         let output_text = self.generate_llm_friendly_text(
