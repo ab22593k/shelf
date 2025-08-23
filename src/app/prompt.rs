@@ -2,10 +2,11 @@ use anyhow::Result;
 use clap::Parser;
 use git2::Repository;
 use glob::Pattern;
+use handlebars::Handlebars;
 use indicatif::{ProgressBar, ProgressStyle};
 use std::collections::{BTreeMap, HashSet};
 use std::fs::{self, File};
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use tempfile::tempdir;
 use tracing::debug;
@@ -14,31 +15,77 @@ use walkdir::WalkDir;
 use crate::config::{Config, find_and_load_config};
 
 #[derive(Parser, Debug, Clone)]
-#[command(author, version, about, long_about = None)]
+#[command(
+    author,
+    version,
+    about = "Converts a GitHub repository or local directory into an LLM-friendly text file.",
+    long_about = "This command processes specified repositories or local directories, \
+                  filters files based on size and user-defined patterns, and generates \
+                  a structured text output suitable for Large Language Models. \
+                  It includes a repository structure overview and file contents, \
+                  and allows for custom templating."
+)]
 pub struct PromptCMD {
-    /// GitHub repository URL or local directory path
-    #[arg(num_args = 1..)]
+    /// Specify one or more GitHub repository URLs (e.g., 'https://github.com/user/repo')
+    /// or local directory paths (e.g., './my_project', '../another_repo').
+    ///
+    /// If a local directory is provided, it will be scanned directly.
+    /// GitHub URLs will be cloned to a temporary directory.
+    #[arg(num_args = 1.., help_heading = "Input Options")]
     repo_sources: Vec<String>,
 
-    /// Output file path (optional)
-    #[arg(short, long)]
+    /// Path to the output file where the LLM-friendly text will be written.
+    ///
+    /// If not specified, a default filename like 'repo_llm_friendly.txt' will be used
+    /// in the current working directory.
+    /// Example: --output-file my_project_context.txt
+    #[arg(short, long, help_heading = "Output Options")]
     output_file: Option<String>,
 
-    /// Maximum file size in bytes (default: 1MB)
-    #[arg(long, default_value_t = 1024 * 1024)]
+    /// Maximum file size in bytes to include in the output. Files exceeding this size will be skipped.
+    ///
+    /// Default is 1MB (1024 * 1024 bytes). This helps prevent including excessively large
+    /// files that might exhaust token limits or contain irrelevant data.
+    /// Example: --max-size 524288 (for 512KB)
+    #[arg(long, default_value_t = 1024 * 1024, help_heading = "Filtering Options")]
     max_size: u64,
 
-    /// Glob patterns for files to explicitly include. Can be repeated.
-    #[arg(long, value_name = "GLOB")]
+    /// Glob patterns for files to explicitly include. Only files matching these patterns will be processed.
+    ///
+    /// This argument can be specified multiple times. Patterns are relative to the repository root.
+    /// Example: --include "src/**/*.rs" --include "config/*.toml"
+    #[arg(long, value_name = "GLOB", value_delimiter = ',', num_args = 1.., help_heading = "Filtering Options")]
     include: Option<Vec<String>>,
 
-    /// Glob patterns for files to explicitly exclude. Can be repeated.
-    #[arg(long, value_name = "GLOB")]
+    /// Glob patterns for files to explicitly exclude. Files matching these patterns will be ignored.
+    ///
+    /// This argument can be specified multiple times. Patterns are relative to the repository root.
+    /// Exclusion patterns take precedence over inclusion patterns.
+    /// Example: --exclude "**/.gitkeep" --exclude "tests/**"
+    #[arg(long, value_name = "GLOB", value_delimiter = ',', num_args = 1.., help_heading = "Filtering Options")]
     exclude: Option<Vec<String>>,
 
-    /// Disable the printing of line numbers in the output file.
-    #[arg(long)]
+    /// Disable the printing of line numbers alongside the code content in the generated output file.
+    ///
+    /// By default, line numbers are included to provide better context for LLMs when referring to specific lines.
+    #[arg(long, help_heading = "Output Options")]
     no_line_numbers: bool,
+
+    /// Path to a Handlebars template file used to wrap the generated repository context.
+    ///
+    /// The template can use the `{{REPOSITORY_CONTEXT}}` placeholder where the generated
+    /// file content should be inserted. This allows for custom pre-prompts or post-prompts.
+    /// Example: --template "path/to/my_template.hbs"
+    ///
+    /// A simple template file `my_template.hbs` might look like:
+    /// ```
+    /// You are an expert programmer. Here is a codebase:
+    /// {{REPOSITORY_CONTEXT}}
+    ///
+    /// Based on the code above, please explain the main architecture.
+    /// ```
+    #[arg(short, long, value_name = "PATH", help_heading = "Output Options")]
+    template: Option<PathBuf>,
 }
 
 /// A converter for GitHub repositories or local directories to an LLM-friendly text file.
@@ -104,17 +151,16 @@ impl RepoConverter {
             skip_files.insert(pattern);
         }
 
-        if let Some(file_name) = file_path.file_name().and_then(|n| n.to_str()) {
-            if skip_files
+        if let Some(file_name) = file_path.file_name().and_then(|n| n.to_str())
+            && skip_files
                 .iter()
-                .any(|p| glob::Pattern::new(p).map_or(false, |pat| pat.matches(file_name)))
-            {
-                debug!(
-                    "Skipping file due to skip_files pattern: {}",
-                    file_path.display()
-                );
-                return true;
-            }
+                .any(|p| glob::Pattern::new(p).is_ok_and(|pat| pat.matches(file_name)))
+        {
+            debug!(
+                "Skipping file due to skip_files pattern: {}",
+                file_path.display()
+            );
+            return true;
         }
 
         if let Ok(metadata) = fs::metadata(file_path)
@@ -188,14 +234,14 @@ impl RepoConverter {
             skip_directories.insert(pattern);
         }
 
-        if let Some(dir_name) = dir_path.file_name().and_then(|n| n.to_str()) {
-            if skip_directories.contains(dir_name) {
-                debug!(
-                    "Skipping directory due to skip_directories: {}",
-                    dir_path.display()
-                );
-                return true;
-            }
+        if let Some(dir_name) = dir_path.file_name().and_then(|n| n.to_str())
+            && skip_directories.contains(dir_name)
+        {
+            debug!(
+                "Skipping directory due to skip_directories: {}",
+                dir_path.display()
+            );
+            return true;
         }
 
         false
@@ -411,6 +457,35 @@ impl RepoConverter {
         output
     }
 
+    /// Applies a template to the generated context if one is provided.
+    fn apply_template(&self, context: String) -> Result<String> {
+        if let Some(template_path) = &self.args.template {
+            debug!("Applying template from: {}", template_path.display());
+            let template_content = fs::read_to_string(template_path).map_err(|e| {
+                io::Error::new(
+                    e.kind(),
+                    format!(
+                        "Failed to read template file '{}': {}",
+                        template_path.display(),
+                        e
+                    ),
+                )
+            })?;
+
+            let mut handlebars = Handlebars::new();
+            handlebars.register_escape_fn(handlebars::no_escape); // To prevent HTML escaping
+
+            let data = serde_json::json!({
+                "REPOSITORY_CONTEXT": context
+            });
+
+            let rendered = handlebars.render_template(&template_content, &data)?;
+            Ok(rendered)
+        } else {
+            Ok(context)
+        }
+    }
+
     /// The main conversion logic.
     pub fn convert_repository(
         &self,
@@ -463,6 +538,9 @@ impl RepoConverter {
             &source_identifiers.join(", "),
         );
 
+        // Apply template if provided
+        let final_output = self.apply_template(output_text)?;
+
         let output_path = match output_file {
             Some(path) => PathBuf::from(path),
             None => {
@@ -475,7 +553,7 @@ impl RepoConverter {
         };
 
         let mut file = File::create(&output_path)?;
-        file.write_all(output_text.as_bytes())?;
+        file.write_all(final_output.as_bytes())?;
 
         Ok(output_path.to_string_lossy().to_string())
     }
@@ -554,6 +632,7 @@ mod tests {
             include: None,
             exclude: None,
             no_line_numbers: false,
+            template: None,
         };
         let converter = RepoConverter::new(args, Config::default());
         assert!(converter.should_skip_directory(Path::new("/project/.git")));
@@ -573,6 +652,7 @@ mod tests {
             include: None,
             exclude: None,
             no_line_numbers: false,
+            template: None,
         };
         let converter = RepoConverter::new(args, Config::default());
 
@@ -594,6 +674,7 @@ mod tests {
             include: None,
             exclude: None,
             no_line_numbers: false,
+            template: None,
         };
         let converter = RepoConverter::new(args, Config::default());
 
@@ -612,6 +693,7 @@ mod tests {
             include: None,
             exclude: None,
             no_line_numbers: false,
+            template: None,
         };
         let converter = RepoConverter::new(args, Config::default());
         let files = converter.collect_files(dir.path());
@@ -642,6 +724,7 @@ mod tests {
             include: None,
             exclude: None,
             no_line_numbers: false,
+            template: None,
         };
         let converter = RepoConverter::new(args, Config::default());
         let files = converter.collect_files(dir.path());
@@ -675,6 +758,7 @@ mod tests {
             include: None,
             exclude: None,
             no_line_numbers: false,
+            template: None,
         };
         let converter = RepoConverter::new(args, Config::default());
         let output_file_path = dir.path().join("output.txt");
