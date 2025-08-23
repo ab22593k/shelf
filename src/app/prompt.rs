@@ -8,14 +8,15 @@ use std::path::{Path, PathBuf};
 use tempfile::tempdir;
 use walkdir::WalkDir;
 
-/// Command-line arguments
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 pub struct PromptCMD {
     /// GitHub repository URL or local directory path
-    repo_source: String,
+    #[arg(num_args = 1..)]
+    repo_sources: Vec<String>,
 
     /// Output file path (optional)
+    #[arg(last(true))]
     output_file: Option<String>,
 
     /// Maximum file size in bytes (default: 1MB)
@@ -212,30 +213,22 @@ impl RepoConverter {
 
         // Helper recursive inserter to avoid holding multiple mutable borrows across iterations
         fn insert_path(node: &mut FileTreeNode, components: &[String], size: u64) {
-            match node {
-                FileTreeNode::Directory(children) => {
-                    if components.is_empty() {
-                        return;
-                    }
-                    let name = &components[0];
-                    if components.len() == 1 {
-                        children.insert(name.clone(), FileTreeNode::File(size));
-                    } else {
-                        let entry = children
-                            .entry(name.clone())
-                            .or_insert_with(|| FileTreeNode::Directory(BTreeMap::new()));
-                        insert_path(entry, &components[1..], size);
-                    }
-                }
-                FileTreeNode::File(_) => {
-                    // If we somehow encounter a file where a directory is expected,
-                    // replace it with a directory containing the file (unlikely).
+            if let FileTreeNode::Directory(children) = node
+                && let Some((name, rest)) = components.split_first()
+            {
+                if rest.is_empty() {
+                    children.insert(name.clone(), FileTreeNode::File(size));
+                } else {
+                    let entry = children
+                        .entry(name.clone())
+                        .or_insert_with(|| FileTreeNode::Directory(BTreeMap::new()));
+                    insert_path(entry, rest, size);
                 }
             }
         }
 
         for file_path in files {
-            let relative_path = file_path.strip_prefix(repo_path).unwrap();
+            let relative_path = file_path.strip_prefix(repo_path).unwrap_or(file_path);
             let components: Vec<String> = relative_path
                 .components()
                 .map(|c| c.as_os_str().to_string_lossy().to_string())
@@ -284,8 +277,10 @@ impl RepoConverter {
         output.push('\n');
 
         for file_path in files {
-            let relative_path = file_path.strip_prefix(repo_path).unwrap();
-            output.push_str(&format!("\nFILE: {}\n", relative_path.display()));
+            // When creating the file header, we need to make the path relative to the original source path,
+            // not the single `repo_path` which might be the CWD.
+            let display_path = file_path.strip_prefix(repo_path).unwrap_or(file_path);
+            output.push_str(&format!("\nFILE: {}\n", display_path.display()));
             output.push_str(&"-".repeat(80));
             output.push('\n');
 
@@ -311,29 +306,47 @@ impl RepoConverter {
     /// The main conversion logic.
     pub fn convert_repository(
         &self,
-        repo_source: &str,
+        repo_sources: &[String],
         output_file: Option<String>,
     ) -> Result<String, Box<dyn std::error::Error>> {
-        let (repo_path, _temp_dir) = if repo_source.starts_with("http") {
-            let temp_dir = tempdir()?;
-            let path = temp_dir.path().to_path_buf();
-            self.clone_repository(repo_source, &path)?;
-            (path, Some(temp_dir))
+        let mut all_files = Vec::new();
+        let mut source_identifiers = Vec::new();
+
+        for repo_source in repo_sources {
+            let (source_path, _temp_dir) = if repo_source.starts_with("http") {
+                let temp_dir = tempdir()?;
+                let path = temp_dir.path().to_path_buf();
+                self.clone_repository(repo_source, &path)?;
+                (path, Some(temp_dir))
+            } else {
+                let path = PathBuf::from(repo_source);
+                (path.canonicalize().unwrap_or(path), None)
+            };
+
+            println!("Collecting files from {repo_source}...");
+            let files = self.collect_files(&source_path);
+            println!("Found {} text files in {}.", files.len(), repo_source);
+            all_files.extend(files);
+            source_identifiers.push(repo_source.to_string());
+        }
+
+        let base_repo_path = if repo_sources.len() == 1 && Path::new(&repo_sources[0]).is_dir() {
+            PathBuf::from(&repo_sources[0]).canonicalize()?
         } else {
-            (PathBuf::from(repo_source), None)
+            std::env::current_dir()?
         };
 
-        println!("Collecting files...");
-        let files = self.collect_files(&repo_path);
-        println!("Found {} text files.", files.len());
-
         println!("Generating LLM-friendly text...");
-        let output_text = self.generate_llm_friendly_text(&repo_path, &files, repo_source);
+        let output_text = self.generate_llm_friendly_text(
+            &base_repo_path,
+            &all_files,
+            &source_identifiers.join(", "),
+        );
 
         let output_path = match output_file {
             Some(path) => PathBuf::from(path),
             None => {
-                let repo_name = Path::new(repo_source)
+                let repo_name = Path::new(&source_identifiers[0])
                     .file_stem()
                     .and_then(|s| s.to_str())
                     .unwrap_or("repo");
@@ -351,7 +364,7 @@ impl RepoConverter {
 pub async fn run(args: PromptCMD) -> Result<()> {
     let converter = RepoConverter::new(args.max_size);
 
-    match converter.convert_repository(&args.repo_source, args.output_file) {
+    match converter.convert_repository(&args.repo_sources, args.output_file) {
         Ok(output_path) => {
             println!("\nConversion completed successfully!");
             println!("Output written to: {output_path}",);
@@ -493,25 +506,25 @@ mod tests {
         let converter = RepoConverter::new(1024 * 1024);
         let output_file_path = dir.path().join("output.txt");
 
-        let result = converter.convert_repository(
-            dir.path().to_str().unwrap(),
-            Some(output_file_path.to_str().unwrap().to_string()),
-        );
-
-        assert!(result.is_ok());
+        converter
+            .convert_repository(
+                &[dir.path().to_str().unwrap().to_string()],
+                Some(output_file_path.to_str().unwrap().to_string()),
+            )
+            .unwrap();
 
         let output_content = fs::read_to_string(output_file_path).unwrap();
 
         // Check that skipped files/dirs are not in the output
-        assert!(!output_content.contains(".gitignore"));
-        assert!(!output_content.contains("logo.png"));
-        assert!(!output_content.contains("large_file.log"));
+        assert!(!output_content.contains("FILE: .gitignore"));
+        assert!(!output_content.contains("FILE: logo.png"));
+        assert!(!output_content.contains("FILE: large_file.log"));
         assert!(!output_content.contains("target/"));
         assert!(!output_content.contains("node_modules/"));
 
         // Check that included files are present
         assert!(output_content.contains("FILE: main.rs"));
-        assert!(output_content.contains("fn main()"));
+        assert!(output_content.contains("fn main() {"));
         assert!(output_content.contains("FILE: README.md"));
         assert!(output_content.contains("This is a test repo."));
         assert!(output_content.contains("FILE: src/lib.rs"));
